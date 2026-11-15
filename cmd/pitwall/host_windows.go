@@ -5,11 +5,15 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"net"
 	"os/exec"
+	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/quanticstudios/pitwall/internal/nowindow"
+	"golang.org/x/sys/windows"
 )
 
 // control is Windows' forward: its ssh cannot add or drop a forward on an
@@ -40,6 +44,12 @@ func (r *sshHost) forwardStart(sock string) error {
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("run ssh: %w", err)
+	}
+	// why: Windows kills no child when its parent dies, so a window that
+	// crashes or is killed would leave this ssh -N holding the forward for
+	// good. The job kills it when this process exits for any reason.
+	if err := jobAssign(killJob(), cmd); err != nil {
+		log.Printf("ssh forward stays after a crash: %v", err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -82,4 +92,53 @@ func (r *sshHost) forwardStop() {
 	if cmd != nil && cmd.Process != nil {
 		cmd.Process.Kill()
 	}
+}
+
+var jobOnce sync.Once
+var job windows.Handle
+
+// killJob is this process's job object, made once, whose processes Windows
+// kills when this process's last job handle closes: always, on exit.
+func killJob() windows.Handle {
+	jobOnce.Do(func() {
+		j, err := newKillJob()
+		if err != nil {
+			log.Printf("no job object: %v", err)
+			return
+		}
+		job = j
+	})
+	return job
+}
+
+// newKillJob is a job object with KILL_ON_JOB_CLOSE.
+func newKillJob() (windows.Handle, error) {
+	j, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		return 0, err
+	}
+	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
+		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{
+			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+		},
+	}
+	if _, err := windows.SetInformationJobObject(j, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
+		windows.CloseHandle(j)
+		return 0, err
+	}
+	return j, nil
+}
+
+// jobAssign puts cmd's process in job j. A nil job fails, as a process
+// already inside a job that forbids nesting may: callers log and go on.
+func jobAssign(j windows.Handle, cmd *exec.Cmd) error {
+	if j == 0 {
+		return fmt.Errorf("no job")
+	}
+	h, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(cmd.Process.Pid))
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(h)
+	return windows.AssignProcessToJobObject(j, h)
 }

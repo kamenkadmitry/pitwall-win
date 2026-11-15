@@ -14,9 +14,13 @@ key, agent and jump host are the ones `ssh box` already uses. There is no
 new login, and no secret goes on a command line. It runs `pitwall
 remote-start` on the host, which starts the daemon there unless one runs,
 then forwards the daemon's socket to a socket in pitwall's runtime folder
-here and opens the window on it. All of it goes through one shared ssh
-connection (`ControlMaster`), which closes 10 minutes after the last window
-on that host. A new session there opens in your home folder on the host.
+here and opens the window on it. On unix all of it goes through one shared
+ssh connection (`ControlMaster`), which closes 10 minutes after the last
+window on that host. Windows' ssh cannot share a connection, so there each
+use is a connection of its own, the forward is a dedicated `ssh -N -L` to a
+loopback TCP port, and the window kills it when it leaves; a job object
+kills it even if the window crashes. A new session there opens in your
+home folder on the host.
 
 To give a host a short name, list it in config.toml:
 
@@ -239,8 +243,8 @@ pitwall new --host box -n evals '~/evals' -- codex "Run the eval suite."
 
 Each prints the worker as `#box:3`. `worktree new --host` resolves
 `--from`, else the default branch, to a commit here and pushes it to the
-repository on box as `refs/pitwall/base/<id>` over the shared ssh
-connection, so commits not pushed anywhere reach the worker. Uncommitted
+repository on box as `refs/pitwall/base/<id>` over ssh (the shared
+connection on unix), so commits not pushed anywhere reach the worker. Uncommitted
 changes stay here. The repository on box is at the same path under box's
 home folder, `~/Work/app` for `~/Work/app` here, or at `--repo`. Box makes
 the worktree from that commit. Removing the worktree while its tab is
@@ -291,7 +295,8 @@ pitwall kill -f box:3
 
 `#3` is always this machine's tab 3, and `box:3`, or `#box:3` as `new
 --host` prints it, box's own tab 3, as `pitwall ls` on box numbers it. A title names a tab here only. Each call
-dials box over the shared ssh connection and drops it when it ends.
+dials box and drops the connection when it ends: the shared ssh connection
+on unix, its own ssh and forward on Windows.
 
 `wait --children` counts a worker on box only while it watches box's
 daemon on a live connection. When box drops, it prints `box unreachable:`

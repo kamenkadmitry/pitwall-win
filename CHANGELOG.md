@@ -26,6 +26,7 @@ takes `--dry-run`.
 
 - On Windows, `pitwall --host` and `[[hosts]]` now work: Microsoft's ssh has no connection sharing, so the socket forward is a dedicated `ssh -N -L` to a loopback TCP port that the window dials, and it ends when the window's connection closes. `[[hosts]] window = true` shows a host's sessions next to this machine's.
 - Settings has a Hosts category: it lists `[[hosts]]` with each entry's ssh destination and window flag, and a form adds, edits and removes entries through the new `config.SetHost`, which edits a `[[hosts]]` table in place as `SetPreset` does a preset.
+- The forward's `ssh -N -L` on Windows now sits in a job object with `KILL_ON_JOB_CLOSE`, so a window that crashes or is killed leaves no ssh holding the port. `pitwall update` and `get.ps1` point at this repository's releases, not upstream's, which ships no Windows remote support.
 
 ## v0.2.13
 

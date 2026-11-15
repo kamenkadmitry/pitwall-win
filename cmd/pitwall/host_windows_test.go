@@ -7,11 +7,14 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // Windows' ssh shares no connection: every use is its own invocation and
@@ -99,6 +102,32 @@ func TestWindowsForward(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Error("the port still answers after cancel")
+}
+
+// A process in a KILL_ON_JOB_CLOSE job dies when the job's last handle
+// closes, which is how the forward's ssh dies with a crashed window.
+func TestKillJob(t *testing.T) {
+	j, err := newKillJob()
+	if err != nil {
+		t.Fatalf("newKillJob: %v", err)
+	}
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-Command", "Start-Sleep 60")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("no powershell.exe: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	if err := jobAssign(j, cmd); err != nil {
+		cmd.Process.Kill()
+		windows.CloseHandle(j)
+		t.Fatalf("jobAssign: %v", err)
+	}
+	windows.CloseHandle(j)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("closing the job did not kill the process")
+	}
 }
 
 // fakeSSHWin stands in for ssh on Windows: it finds -L local:remote in

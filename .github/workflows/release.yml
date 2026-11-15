@@ -28,12 +28,9 @@ jobs:
     strategy:
       matrix:
         include:
-          # why: Ubuntu 22.04's glibc 2.35 also runs on Debian 12; a 24.04 build needs glibc 2.39.
-          - { goos: linux, goarch: amd64, runner: ubuntu-22.04 }
-          - { goos: linux, goarch: arm64, runner: ubuntu-22.04-arm }
-          - { goos: darwin, goarch: arm64, runner: macos-latest }
-          - { goos: darwin, goarch: amd64, runner: macos-latest }
-          # why: Gio needs no cgo on Windows, so Linux cross-compiles it.
+          # pitwall-win ships Windows builds only; remote daemons install
+          # upstream's binaries. Gio needs no cgo on Windows, so Linux
+          # cross-compiles it.
           - { goos: windows, goarch: amd64, runner: ubuntu-latest }
           - { goos: windows, goarch: arm64, runner: ubuntu-latest }
     runs-on: ${{ matrix.runner }}
