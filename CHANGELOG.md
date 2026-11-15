@@ -22,6 +22,11 @@ Without that key or the Android SDK/NDK, tagging still succeeds and prints
 the retry command, `sh scripts/apk-release.sh vX.Y.Z`. Either release step
 takes `--dry-run`.
 
+## Unreleased
+
+- On Windows, `pitwall --host` and `[[hosts]]` now work: Microsoft's ssh has no connection sharing, so the socket forward is a dedicated `ssh -N -L` to a loopback TCP port that the window dials, and it ends when the window's connection closes. `[[hosts]] window = true` shows a host's sessions next to this machine's.
+- Settings has a Hosts category: it lists `[[hosts]]` with each entry's ssh destination and window flag, and a form adds, edits and removes entries through the new `config.SetHost`, which edits a `[[hosts]]` table in place as `SetPreset` does a preset.
+
 ## v0.2.13
 
 - A tab started with the guard, here or with `--host`, no longer starts when pitwall's hooks are missing from the agent's config folder, and a worker that takes over after CI fails keeps the guard.
