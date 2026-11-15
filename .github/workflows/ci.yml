@@ -164,7 +164,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [daemon, gitstat, cmd, rest]
+        shard: [daemon-ah, daemon-ip, daemon-qz, gitstat, cmd, rest]
     defaults:
       run:
         shell: bash
@@ -194,9 +194,17 @@ jobs:
             echo "$d: write $((256 * 1024 * 1000000000 / (t1 - t0) / 1024)) MB/s"
             rm -f "$u/cibench.tmp"
           done
-      - name: Test daemon
-        if: matrix.shard == 'daemon'
-        run: go test -p=1 -timeout 10m ./internal/daemon
+      # why: internal/daemon alone was the 5-minute floor; its tests split
+      # by name range so a new test lands in a shard on its own.
+      - name: Test daemon A-H
+        if: matrix.shard == 'daemon-ah'
+        run: go test -p=1 -timeout 10m -run 'Test[A-H]' ./internal/daemon
+      - name: Test daemon I-P
+        if: matrix.shard == 'daemon-ip'
+        run: go test -p=1 -timeout 10m -run 'Test[I-P]' ./internal/daemon
+      - name: Test daemon Q-Z
+        if: matrix.shard == 'daemon-qz'
+        run: go test -p=1 -timeout 10m -run 'Test[Q-Z]' ./internal/daemon
       - name: Test gitstat
         if: matrix.shard == 'gitstat'
         run: go test -p=1 -timeout 10m ./internal/gitstat
