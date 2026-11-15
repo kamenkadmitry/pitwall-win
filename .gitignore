@@ -12,6 +12,7 @@
 # Build output.
 /pitwall
 /pitwall.exe
+/pitwall-win.exe
 /pwdemo-*
 /dist/
 *.test
