@@ -25,7 +25,7 @@ function Install-Pitwall {
     $ProgressPreference = 'SilentlyContinue'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-    $repo = 'quanticstudios/pitwall'
+    $repo = 'kamenkadmitry/pitwall-win'
     $arch = $env:PROCESSOR_ARCHITEW6432
     if (-not $arch) { $arch = $env:PROCESSOR_ARCHITECTURE }
     $name = Get-PitwallAsset $arch

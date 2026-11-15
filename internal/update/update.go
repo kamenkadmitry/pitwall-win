@@ -28,7 +28,9 @@ import (
 // installs.
 // why: GitHub's API allows 60 requests an hour per IP without a token,
 // which other tools on the machine use up; this page has no such limit.
-const LatestURL = "https://github.com/quanticstudios/pitwall/releases/latest"
+// pitwall-win: this repo's own releases, so pitwall update never replaces
+// this binary with upstream's, which lacks the Windows --host support.
+const LatestURL = "https://github.com/kamenkadmitry/pitwall-win/releases/latest"
 
 // Managed is whether a package manager owns the binary at exe, a resolved
 // path: Homebrew's Cellar, /usr/bin from pacman or a distro package, or
