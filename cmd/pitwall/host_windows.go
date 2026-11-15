@@ -12,10 +12,10 @@ import (
 	"github.com/quanticstudios/pitwall/internal/nowindow"
 )
 
-// controlForward is control on Windows, whose ssh cannot add or drop a
-// forward on an existing connection: "forward" runs a dedicated ssh -N -L
-// that holds it, and "cancel" kills that process.
-func (r *sshHost) controlForward(op, sock string) error {
+// control is Windows' forward: its ssh cannot add or drop a forward on an
+// existing connection, so "forward" runs a dedicated ssh -N -L that holds
+// it, and "cancel" kills that process.
+func (r *sshHost) control(op, sock string) error {
 	switch op {
 	case "forward":
 		return r.forwardStart(sock)

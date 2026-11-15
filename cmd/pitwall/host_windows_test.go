@@ -43,7 +43,7 @@ func TestWindowsSSHArgs(t *testing.T) {
 
 // The forward runs through fakeSSHWin, a stand-in for ssh that relays the
 // -L port to the host's unix socket. forwardStart returns once it answers,
-// controlForward "cancel" kills it, and the port stops serving.
+// control "cancel" kills it, and the port stops serving.
 func TestWindowsForward(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PITWALL_TEST_SSH", dir)
@@ -73,7 +73,7 @@ func TestWindowsForward(t *testing.T) {
 	local := free.Addr().String()
 	free.Close()
 	r := &sshHost{name: "box", ssh: os.Args[0], dest: "box", local: local, localNet: "tcp"}
-	if err := r.controlForward("forward", sock); err != nil {
+	if err := r.control("forward", sock); err != nil {
 		t.Fatal(err)
 	}
 	c, err := net.DialTimeout("tcp", r.local, 2*time.Second)
@@ -89,7 +89,7 @@ func TestWindowsForward(t *testing.T) {
 		t.Fatalf("echo through the forward: %v", err)
 	}
 	c.Close()
-	if err := r.controlForward("cancel", sock); err != nil {
+	if err := r.control("cancel", sock); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 50; i++ {

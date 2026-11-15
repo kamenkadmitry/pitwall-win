@@ -339,24 +339,9 @@ func (r *sshHost) install() string {
 	return fmt.Sprintf("ssh %s 'curl -fsSL %s | %ssh'", r.dest, getScript, pin)
 }
 
-// control asks the shared connection to forward or cancel the forward of
-// sock on the host to r.local. On Windows, which has no shared connection,
-// "forward" is a dedicated ssh -N -L process and "cancel" kills it.
-func (r *sshHost) control(op, sock string) error {
-	if runtime.GOOS == "windows" {
-		return r.controlForward(op, sock)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, r.ssh, r.sshArgs([]string{"-O", op, "-L", r.local + ":" + sock})...).CombinedOutput()
-	if err != nil {
-		if msg := lastLine(string(out)); msg != "" {
-			return errors.New(msg)
-		}
-		return err
-	}
-	return nil
-}
+// control forwards or cancels the forward of sock on the host to
+// r.local. On unix it rides the shared connection (host_other.go); on
+// Windows it is a dedicated ssh -N -L process (host_windows.go).
 
 // close drops the forward and its socket here. The host's daemon keeps
 // running, and the shared connection ends when no window uses it.
