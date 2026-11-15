@@ -304,6 +304,16 @@ func (p *Page) presetForm(btn func(id, label string, kind btnKind, click func())
 
 // formField is an editor the preset form saves on Save or Enter.
 func (p *Page) formField(ed *widget.Editor, placeholder string, width unit.Dp) gl.Widget {
+	var focus *bool
+	if ed == &p.pr.name {
+		focus = &p.pr.focus
+	}
+	return p.edField(ed, placeholder, width, p.savePreset, focus)
+}
+
+// edField is a single-line editor that runs submit on Enter and takes the
+// focus once when focus is set.
+func (p *Page) edField(ed *widget.Editor, placeholder string, width unit.Dp, submit func(), focus *bool) gl.Widget {
 	return func(gtx gl.Context) gl.Dimensions {
 		ed.SingleLine, ed.Submit = true, true
 		for {
@@ -312,11 +322,11 @@ func (p *Page) formField(ed *widget.Editor, placeholder string, width unit.Dp) g
 				break
 			}
 			if _, ok := ev.(widget.SubmitEvent); ok {
-				p.savePreset()
+				submit()
 			}
 		}
-		if ed == &p.pr.name && p.pr.focus {
-			p.pr.focus = false
+		if focus != nil && *focus {
+			*focus = false
 			gtx.Execute(key.FocusCmd{Tag: ed})
 		}
 		gtx.Constraints.Max.X = min(gtx.Constraints.Max.X, gtx.Dp(width))

@@ -20,6 +20,7 @@ import (
 
 	"github.com/quanticstudios/pitwall/internal/config"
 	"github.com/quanticstudios/pitwall/internal/model"
+	"github.com/quanticstudios/pitwall/internal/nowindow"
 	"github.com/quanticstudios/pitwall/internal/proto"
 	"github.com/quanticstudios/pitwall/internal/ui/app"
 )
@@ -52,9 +53,6 @@ func parseHost(args []string) (host, session string, ok bool) {
 // runHostGUI is runGUI on the daemon of an ssh host, which it starts when
 // none runs there.
 func runHostGUI(host, session string) error {
-	if runtime.GOOS == "windows" {
-		return errors.New("pitwall --host needs ssh's connection sharing (ControlMaster), which Windows' ssh lacks")
-	}
 	s, _ := config.Load()
 	r, err := newSSHHost(host, s.Hosts)
 	if err != nil {
@@ -65,23 +63,27 @@ func runHostGUI(host, session string) error {
 	return runGUI(session)
 }
 
-// sshHost is a daemon on an ssh host. One ssh connection, shared through
-// ControlMaster, starts it and forwards its socket to a socket here, which
-// the window dials. Everything else about the connection (user, port, key,
-// jump host) is the user's ssh config's.
+// sshHost is a daemon on an ssh host. On unix one ssh connection, shared
+// through ControlMaster, starts it and forwards its socket to a socket
+// here, which the window dials. Windows' ssh cannot share a connection, so
+// there each use is a connection of its own, and the forward a dedicated
+// ssh -N -L process. Everything else about the connection (user, port,
+// key, jump host) is the user's ssh config's.
 type sshHost struct {
-	name  string // as given to --host
-	ssh   string // the ssh binary
-	dest  string // the ssh destination
-	dir   string // here: the shared connection's control socket, and local
-	local string // the forwarded socket here
+	name     string // as given to --host
+	ssh      string // the ssh binary
+	dest     string // the ssh destination
+	dir      string // here: the shared connection's control socket, and local
+	local    string // the forwarded socket here: a path, or host:port on Windows
+	localNet string // net.Dial's network for local: "unix" or "tcp"
 
 	// batch keeps ssh from asking for a password or passphrase: an agent's
 	// pane has no one to answer, and a prompt would hang the command.
 	batch bool
 
 	mu   sync.Mutex
-	sock string // the daemon's socket on the host, once known
+	sock string    // the daemon's socket on the host, once known
+	fwd  *exec.Cmd // Windows: the ssh -N -L process holding the forward
 }
 
 // newSSHHost finds name's ssh destination in hosts, else uses name as one.
@@ -105,8 +107,26 @@ func newSSHHost(name string, hosts []config.Host) (*sshHost, error) {
 	}
 	dir := filepath.Dir(path)
 	// One window can forward several hosts' sockets.
-	local := filepath.Join(dir, fmt.Sprintf("remote-%d-%d.sock", os.Getpid(), forwards.Add(1)))
-	return &sshHost{name: name, ssh: ssh, dest: dest, dir: dir, local: local}, nil
+	local, localNet, err := localForward(dir)
+	if err != nil {
+		return nil, err
+	}
+	return &sshHost{name: name, ssh: ssh, dest: dest, dir: dir, local: local, localNet: localNet}, nil
+}
+
+// localForward is the here end of a host's socket forward: a unix socket
+// under dir, or on Windows a loopback TCP port, which is the only kind
+// Windows' ssh can bind a -L to.
+func localForward(dir string) (local, network string, err error) {
+	if runtime.GOOS != "windows" {
+		return filepath.Join(dir, fmt.Sprintf("remote-%d-%d.sock", os.Getpid(), forwards.Add(1))), "unix", nil
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", "", fmt.Errorf("reserve a port for the forward: %w", err)
+	}
+	defer ln.Close()
+	return ln.Addr().String(), "tcp", nil
 }
 
 // forwards counts the sshHosts this process made.
@@ -120,19 +140,26 @@ func (r *sshHost) sshArgs(opts []string, command ...string) []string {
 	return append(args, command...)
 }
 
-// shared are the options of the shared connection.
+// shared are the options every ssh invocation gets. On unix they keep one
+// shared connection through ControlMaster; Windows' ssh lacks connection
+// sharing, so there they only tune each connection on its own.
 func (r *sshHost) shared() []string {
-	args := []string{
-		"-o", "ControlMaster=auto",
-		"-o", "ControlPath=" + filepath.Join(r.dir, "ssh-%C"),
-		"-o", "ControlPersist=10m",
-		// why: a forward from a connection that dropped leaves its socket file.
-		"-o", "StreamLocalBindUnlink=yes",
+	var args []string
+	if runtime.GOOS != "windows" {
+		args = append(args,
+			"-o", "ControlMaster=auto",
+			"-o", "ControlPath="+filepath.Join(r.dir, "ssh-%C"),
+			"-o", "ControlPersist=10m",
+			// why: a forward from a connection that dropped leaves its socket file.
+			"-o", "StreamLocalBindUnlink=yes",
+		)
+	}
+	args = append(args,
 		// why: a link that died silently, as when the laptop slept, ends the
 		// connection within a minute, and the window reconnects.
 		"-o", "ServerAliveInterval=15",
 		"-o", "ConnectTimeout=10",
-	}
+	)
 	if r.batch {
 		args = append(args, "-o", "BatchMode=yes")
 	}
@@ -193,16 +220,13 @@ func (r *sshHost) socket(restart bool) (net.Conn, error) {
 	if err := r.control("forward", sock); err != nil {
 		return nil, fmt.Errorf("forward pitwall's socket from %s: %w", r.name, err)
 	}
-	return net.Dial("unix", r.local)
+	return net.Dial(r.localNet, r.local)
 }
 
 // dialHost connects to the daemon on [[hosts]] entry name as a client of
 // kind ("cli" or "watch", see proto.Hello); done drops the forward. From a
 // pitwall pane ssh never prompts. Tests replace it.
 var dialHost = func(name, kind string) (conn *cliConn, done func(), err error) {
-	if runtime.GOOS == "windows" {
-		return nil, nil, errors.New("--host needs ssh's connection sharing (ControlMaster), which Windows' ssh lacks")
-	}
 	s, _ := config.Load()
 	if err := agentHost(name, s.Hosts); err != nil {
 		return nil, nil, err
@@ -241,6 +265,7 @@ func (r *sshHost) start(restart bool) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, r.ssh, r.sshArgs(nil, startCommand(restart))...)
+	nowindow.Set(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	// why: the shared connection's process stays in the background; ssh
@@ -314,20 +339,9 @@ func (r *sshHost) install() string {
 	return fmt.Sprintf("ssh %s 'curl -fsSL %s | %ssh'", r.dest, getScript, pin)
 }
 
-// control asks the shared connection to forward or cancel the forward of
-// sock on the host to r.local.
-func (r *sshHost) control(op, sock string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, r.ssh, r.sshArgs([]string{"-O", op, "-L", r.local + ":" + sock})...).CombinedOutput()
-	if err != nil {
-		if msg := lastLine(string(out)); msg != "" {
-			return errors.New(msg)
-		}
-		return err
-	}
-	return nil
-}
+// control forwards or cancels the forward of sock on the host to
+// r.local. On unix it rides the shared connection (host_other.go); on
+// Windows it is a dedicated ssh -N -L process (host_windows.go).
 
 // close drops the forward and its socket here. The host's daemon keeps
 // running, and the shared connection ends when no window uses it.
@@ -338,7 +352,9 @@ func (r *sshHost) close() {
 	if sock != "" {
 		r.control("cancel", sock)
 	}
-	os.Remove(r.local)
+	if r.localNet == "unix" {
+		os.Remove(r.local)
+	}
 }
 
 func lastLine(s string) string {

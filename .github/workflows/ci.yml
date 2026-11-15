@@ -129,9 +129,9 @@ jobs:
         run: go test -count=1 -v -run 'TestUpdateDrill|TestFinishUpdate' ./cmd/pitwall
       # why: the macOS suite has never passed; drop continue-on-error after its first green run.
       - name: Test everything
-        continue-on-error: ${{ runner.os == 'macOS' }}
-        # why: Git-heavy packages competing on Windows overrun checkpoint and retrieval deadlines.
-        run: go test ${{ runner.os == 'Windows' && '-p=1' || '' }} -timeout 5m ./...
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: go test -timeout 5m ./...
       - name: Stop leftover test processes
         if: always() && runner.os == 'Windows'
         shell: pwsh
@@ -154,3 +154,61 @@ jobs:
           New-PitwallShortcut $exe $lnk
           $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
           if ($s.TargetPath -ne $exe -or $s.IconLocation -ne "$exe,0") { "shortcut: $($s.TargetPath) $($s.IconLocation)"; exit 1 }
+
+  # windows-test splits the suite across runners: the git-heavy packages
+  # that flake when they compete for CPU stay serial (-p=1), each on its
+  # own runner, and everything else runs with the default -p (all cores).
+  windows-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [daemon, gitstat, cmd, rest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      # why: runner C: writes at ~120 MB/s while D: does ~210 MB/s. Only
+      # the build cache moves: test temp dirs must stay on C: because
+      # upstream tests assume os.TempDir and C: are the same drive
+      # (TestCwdFollowsCd sends "cd C:\Windows" without /d).
+      - name: Redirect the build cache to the D drive
+        run: echo "GOCACHE=$RUNNER_TEMP/go-build" >> "$GITHUB_ENV"
+      - name: Hardware report
+        run: |
+          echo "cores: $(nproc)"
+          powershell -NoProfile -c "Write-Output ('RAM GB: ' + [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1))"
+          for d in "$TEMP" "$RUNNER_TEMP" "$GITHUB_WORKSPACE"; do
+            u=$(cygpath -u "$d")
+            t0=$(date +%s%N)
+            dd if=/dev/zero of="$u/cibench.tmp" bs=1M count=256 2>/dev/null
+            sync
+            t1=$(date +%s%N)
+            echo "$d: write $((256 * 1024 * 1000000000 / (t1 - t0) / 1024)) MB/s"
+            rm -f "$u/cibench.tmp"
+          done
+      - name: Test daemon
+        if: matrix.shard == 'daemon'
+        run: go test -p=1 -timeout 10m ./internal/daemon
+      - name: Test gitstat
+        if: matrix.shard == 'gitstat'
+        run: go test -p=1 -timeout 10m ./internal/gitstat
+      - name: Test cmd
+        if: matrix.shard == 'cmd'
+        run: go test -p=1 -timeout 10m ./cmd/pitwall
+      - name: Test the rest
+        if: matrix.shard == 'rest'
+        run: go test -timeout 5m $(go list ./... | grep -v -e '/internal/daemon$' -e '/internal/gitstat$' -e '/cmd/pitwall$')
+      - name: Stop leftover test processes
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process | Where-Object { $_.ProcessName -like '*.test' -or $_.ProcessName -like 'pitwall*' } | Stop-Process -Force -ErrorAction SilentlyContinue
+          exit 0
