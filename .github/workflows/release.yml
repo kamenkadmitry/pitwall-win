@@ -121,57 +121,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: gh release create "$TAG" dist/* --title "pitwall $TAG" --notes-file notes.md --verify-tag --latest
 
-  # The release is out by now: a failure here leaves it as it is.
-  packages:
-    needs: release
-    timeout-minutes: 5
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: go.mod
-      - name: Render the formula, the manifest and the AUR files
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          gh release download "$TAG" -p checksums.txt -D sums
-          go run ./scripts/pkgrender -tag "$TAG" -sums sums/checksums.txt -out pkg
-          tar -czf pitwall-bin.aur.tar.gz -C pkg PKGBUILD .SRCINFO
-          gh release upload "$TAG" pitwall-bin.aur.tar.gz --clobber
-      - name: Push the Homebrew formula and the Scoop manifest
-        env:
-          TAG: ${{ github.ref_name }}
-          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
-          SCOOP_BUCKET_DEPLOY_KEY: ${{ secrets.SCOOP_BUCKET_DEPLOY_KEY }}
-        run: |
-          printf '%s\n' 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > known_hosts
-          # publish copies $3 to $4 in GitHub repo $1 and pushes it with deploy key $2.
-          publish() {
-            if [ -z "$2" ]; then
-              echo "::notice::No deploy key for $1; skipped."
-              return 0
-            fi
-            dir=$(mktemp -d)
-            printf '%s\n' "$2" > "$dir/key"
-            chmod 600 "$dir/key"
-            export GIT_SSH_COMMAND="ssh -i $dir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$PWD/known_hosts"
-            git clone -q --depth 1 "git@github.com:$1.git" "$dir/repo"
-            mkdir -p "$dir/repo/$(dirname "$4")"
-            cp "$3" "$dir/repo/$4"
-            git -C "$dir/repo" add "$4"
-            if git -C "$dir/repo" diff --cached --quiet; then
-              echo "$1 already has $4 for $TAG."
-            else
-              git -C "$dir/repo" -c user.name='Quantic Studios' -c user.email=info@quanticstudios.io commit -q -m "pitwall $TAG"
-              git -C "$dir/repo" push -q origin HEAD
-            fi
-            rm -rf "$dir"
-          }
-          publish quanticstudios/homebrew-tap "$HOMEBREW_TAP_DEPLOY_KEY" pkg/pitwall.rb Formula/pitwall.rb
-          publish quanticstudios/scoop-bucket "$SCOOP_BUCKET_DEPLOY_KEY" pkg/pitwall.json bucket/pitwall.json
+  # why: upstream's packages job renders the Homebrew formula, the Scoop
+  # manifest and the AUR files from every platform's asset and pushes them
+  # to upstream's taps. pitwall-win ships Windows zips only and owns no
+  # taps, so the job is dropped rather than taught to skip.
