@@ -175,9 +175,15 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
+      # why: runner C: writes at ~120 MB/s while D: does ~210 MB/s. Only
+      # the build cache moves: test temp dirs must stay on C: because
+      # upstream tests assume os.TempDir and C: are the same drive
+      # (TestCwdFollowsCd sends "cd C:\Windows" without /d).
+      - name: Redirect the build cache to the D drive
+        run: echo "GOCACHE=$RUNNER_TEMP/go-build" >> "$GITHUB_ENV"
       - name: Hardware report
         run: |
-          echo "cores: $(nproc), GOMAXPROCS: $(go env GOMAXPROCS)"
+          echo "cores: $(nproc)"
           powershell -NoProfile -c "Write-Output ('RAM GB: ' + [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1))"
           for d in "$TEMP" "$RUNNER_TEMP" "$GITHUB_WORKSPACE"; do
             u=$(cygpath -u "$d")
