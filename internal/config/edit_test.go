@@ -244,3 +244,57 @@ preset = "Quick"
 		t.Fatal(err)
 	}
 }
+
+func TestSetHost(t *testing.T) {
+	const src = `[sidebar]
+
+# The machines pitwall reaches.
+[[hosts]]
+name = "box"
+ssh = "me@box"
+window = true
+
+[[hosts]]
+name = "gpu"
+
+[appearance]
+theme = "dark"
+`
+	p := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(p, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	read := func() string { b, _ := os.ReadFile(p); return string(b) }
+	if err := SetHost(p, "box", &Host{Name: "web", SSH: "me@web"}); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(src, "name = \"box\"\nssh = \"me@box\"\nwindow = true\n", "name = \"web\"\nssh = \"me@web\"\n", 1)
+	if got := read(); got != want {
+		t.Fatalf("edit:\n%s", got)
+	}
+	if err := SetHost(p, "", &Host{Name: "nas", Window: true}); err != nil {
+		t.Fatal(err)
+	}
+	want = strings.Replace(want, "name = \"gpu\"\n", "name = \"gpu\"\n\n[[hosts]]\nname = \"nas\"\nwindow = true\n", 1)
+	if got := read(); got != want {
+		t.Fatalf("add:\n%s", got)
+	}
+	for _, h := range []Host{{Name: "gpu"}, {Name: "local"}, {Name: " -x"}, {}} {
+		if err := SetHost(p, "", &h); err == nil {
+			t.Errorf("host %+v saved", h)
+		}
+	}
+	if err := SetHost(p, "gpu", nil); err != nil {
+		t.Fatal(err)
+	}
+	want = strings.Replace(want, "[[hosts]]\nname = \"gpu\"\n\n", "", 1)
+	if got := read(); got != want {
+		t.Fatalf("delete:\n%s", got)
+	}
+	if err := SetHost(p, "gpu", nil); err == nil {
+		t.Error("a missing host deleted")
+	}
+	if err := SetHost(filepath.Join(t.TempDir(), "new.toml"), "", &Host{Name: "box"}); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -55,6 +55,7 @@ const (
 	catAppearance = iota
 	catKeys
 	catTerminal
+	catHosts
 	catAgents
 	catFleet
 	catNotify
@@ -69,6 +70,7 @@ var categories = []struct{ name, desc string }{
 	{"Appearance", "Theme, fonts and spacing. Changes apply as you make them."},
 	{"Keyboard shortcuts", "Click a shortcut to record a new one."},
 	{"Terminal", "How every pane behaves."},
+	{"Hosts", "Other machines' pitwall, reached over ssh."},
 	{"Agents", "The sidebar learns what each agent is doing from hooks in its config."},
 	{"Fleet", "An orchestrator agent starts workers in lanes by task size; pitwall times them and escalates CI that keeps failing."},
 	{"Notifications", "Desktop notifications for a pane that needs you while you are looking elsewhere."},
@@ -141,6 +143,7 @@ type Page struct {
 	closeWorkers durationField
 	fl           fleetPage
 	pr           presetsPage
+	ho           hostsPage
 	us           usagePage
 	ch           charts // hover and focus in the Timing and Agent errors charts
 }
@@ -185,7 +188,7 @@ func (p *Page) ReloadHooks() {
 
 // Hide closes the page, dropping a recording or open dropdown.
 func (p *Page) Hide() {
-	p.shown, p.rec, p.keyRec, p.conflict, p.dd, p.pr.open = false, slot{}, false, nil, "", false
+	p.shown, p.rec, p.keyRec, p.conflict, p.dd, p.pr.open, p.ho.open = false, slot{}, false, nil, "", false, false
 }
 
 // TaskPrompt is the prompt for the New task dialog after AskAgent.
@@ -539,8 +542,8 @@ func (p *Page) content(gtx gl.Context, q string) gl.Dimensions {
 	addSections := func(secs []section) {
 		for _, sec := range secs {
 			space(24)
-			if sec.anchor && p.pr.scroll {
-				p.pr.scroll = false
+			if sec.anchor && (p.pr.scroll || p.ho.scroll) {
+				p.pr.scroll, p.ho.scroll = false, false
 				p.list.Position = gl.Position{First: len(items)}
 			}
 			if sec.title != "" {
@@ -762,6 +765,8 @@ func (p *Page) sections(cat int) []section {
 		return p.shortcuts()
 	case catTerminal:
 		return p.terminal()
+	case catHosts:
+		return p.hosts()
 	case catAgents:
 		return p.agents()
 	case catFleet:
