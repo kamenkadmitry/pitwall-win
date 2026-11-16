@@ -24,6 +24,7 @@ takes `--dry-run`.
 
 ## Unreleased
 
+- The host picker's dropdown paints after the frame, so the form's later rows no longer draw over its list.
 - The host editor on Settings, Hosts offers a filterable dropdown of the machine names ssh already knows from `~/.ssh/config`, previews the `[[hosts]]` table it will write, and checks the connection over ssh: whether the host answers and has pitwall on its PATH. When it does not, an Install button runs `get.sh --core` there; Save activates only after a green check. A new host's "in every window" switch defaults on, a pasted `ssh ` prefix in the ssh field is dropped, and the field's help now says the destination only.
 
 ## v0.2.13-win.1
