@@ -22,7 +22,7 @@ Without that key or the Android SDK/NDK, tagging still succeeds and prints
 the retry command, `sh scripts/apk-release.sh vX.Y.Z`. Either release step
 takes `--dry-run`.
 
-## Unreleased
+## v0.2.14-win.1
 
 - pitwall-win is made from upstream v0.2.14 instead of v0.2.13; `## v0.2.14` below lists what that brings. Its lines about Linux, such as the JSON socket and pitwall-core, describe a Linux pitwall: the one on a host, not this Windows build.
 - Install in the host editor, and the install command `pitwall --host` prints, put upstream v0.2.14 on a host: the pin follows the release this build was made from.
