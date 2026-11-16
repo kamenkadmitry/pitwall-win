@@ -70,15 +70,20 @@ func TestProbeResult(t *testing.T) {
 		want        int
 		wantOut     string
 	}{
-		{out: "pitwall-probe\t/home/me/.local/bin/pitwall\tok\tpitwall v0.2.13\n", want: probeDaemon, wantOut: "pitwall v0.2.13 at /home/me/.local/bin/pitwall"},
-		{out: "Welcome to box\r\npitwall-probe\t/usr/bin/pitwall\tok\tpitwall v0.2.13\r\n", want: probeDaemon, wantOut: "pitwall v0.2.13 at /usr/bin/pitwall"},
-		{out: "motd\npitwall-probe\t\t\t\n", want: probeNoDaemon},
+		{out: "pitwall-probe\t/home/me/.local/bin/pitwall\tok\tyes\tpitwall v0.2.13\n", want: probeDaemon, wantOut: "pitwall v0.2.13 at /home/me/.local/bin/pitwall"},
+		{out: "Welcome to box\r\npitwall-probe\t/usr/bin/pitwall\tok\tno\tpitwall v0.2.13\r\n", want: probeDaemon, wantOut: "pitwall v0.2.13 at /usr/bin/pitwall"},
+		{out: "motd\npitwall-probe\t\t\tno\t\n", want: probeNoDaemon},
 		// A pitwall that is there and does not start is no green check.
-		{out: "pitwall-probe\t/home/me/.local/bin/pitwall\tfail\t/home/me/.local/bin/pitwall: error while loading shared libraries: libxkbcommon-x11.so.0: cannot open shared object file: No such file or directory\n",
+		{out: "pitwall-probe\t/home/me/.local/bin/pitwall\tfail\tyes\t/home/me/.local/bin/pitwall: error while loading shared libraries: libxkbcommon-x11.so.0: cannot open shared object file: No such file or directory\n",
 			want: probeBroken, wantOut: "/home/me/.local/bin/pitwall does not start: error while loading shared libraries: libxkbcommon-x11.so.0: cannot open shared object file: No such file or directory" +
 				". This pitwall release links the window's libraries: Install adds them on a host with apt-get; elsewhere install the one named with the host's package manager, then check again"},
-		{out: "pitwall-probe\t/usr/bin/pitwall\tfail\tExec format error\n", want: probeBroken, wantOut: "/usr/bin/pitwall does not start: Exec format error"},
-		{out: "pitwall-probe\t/usr/bin/pitwall\n", want: probeFail, wantOut: `the host's answer has 1 fields, not 3: "/usr/bin/pitwall"`},
+		{out: "pitwall-probe\t/home/me/.local/bin/pitwall\tfail\tyes\tExec format error\n", want: probeBroken, wantOut: "/home/me/.local/bin/pitwall does not start: Exec format error"},
+		// One ahead of ~/.local/bin on the PATH is not Install's to replace.
+		{out: "pitwall-probe\t/usr/local/bin/pitwall\tfail\tno\tExec format error\n", want: probeShadowed,
+			wantOut: "/usr/local/bin/pitwall does not start: Exec format error. It is ahead of ~/.local/bin on the host's PATH, so Install cannot replace it: remove or repair it on the host, then check again"},
+		{out: "pitwall-probe\t/usr/bin/pitwall\tfail\tno\t/usr/bin/pitwall: error while loading shared libraries: libEGL.so.1: cannot open shared object file\n", want: probeShadowed,
+			wantOut: "/usr/bin/pitwall does not start: error while loading shared libraries: libEGL.so.1: cannot open shared object file. It is ahead of ~/.local/bin on the host's PATH, so Install cannot replace it: install the library named with the host's package manager, or remove this pitwall there, then check again"},
+		{out: "pitwall-probe\t/usr/bin/pitwall\tok\tpitwall v0.2.13\n", want: probeFail, wantOut: `the host's answer has 3 fields, not 4: "/usr/bin/pitwall\tok\tpitwall v0.2.13"`},
 		{out: "motd\n", want: probeFail, wantOut: `the host ran no sh: it printed "motd"`},
 		{stderr: "kex_exchange_identification: read: Connection reset by peer\nssh: connect to host box port 22: Connection refused\n", err: exit(255),
 			want: probeFail, wantOut: "ssh: connect to host box port 22: Connection refused"},
@@ -160,6 +165,20 @@ func TestProbeCommand(t *testing.T) {
 	if st != probeBroken || !strings.Contains(msg, "does not start: pitwall: error while loading shared libraries: libxkbcommon-x11.so.0: no such file second line") {
 		t.Fatalf("pitwall that does not start: probe printed %q, %v, read as %d, %q", out, err, st, msg)
 	}
+	// The reviewer's case: a pitwall that does not start sits on the PATH
+	// ahead of a good one in ~/.local/bin. A window runs the first, so the
+	// probe reports that one, and as not Install's to replace.
+	script(t, bin, `[ "$1" = --version ] && echo "pitwall v0.2.13"`)
+	ahead := t.TempDir()
+	script(t, filepath.Join(ahead, "pitwall"), "echo 'Exec format error' >&2; exit 126")
+	out, err = asHost(probeCommand, "", home, []string{ahead, shDir})
+	st, msg = probeResult(out, "", err, false, "box")
+	if st != probeShadowed || !strings.Contains(msg, "/pitwall does not start: Exec format error. It is ahead of ~/.local/bin") {
+		t.Fatalf("a broken pitwall ahead of ~/.local/bin: probe printed %q, %v, read as %d, %q", out, err, st, msg)
+	}
+	if v := viewOf(hostCheckState{probe: st, probeOut: msg}); v.canInstall || !v.canCheck {
+		t.Fatalf("a broken pitwall ahead of ~/.local/bin offers Install: %+v", v)
+	}
 }
 
 // Install feeds this build's get-host.sh to sh on the host, pinned to the
@@ -226,6 +245,8 @@ func TestHostCheckView(t *testing.T) {
 		{s: hostCheckState{probe: probeDaemon, probeOut: "/usr/bin/pitwall"}, check: true, tone: toneGreen, wantInStatus: "/usr/bin/pitwall"},
 		{s: hostCheckState{probe: probeNoDaemon}, check: true, install: true, tone: toneYellow, wantInStatus: "no pitwall"},
 		{s: hostCheckState{probe: probeFail, probeOut: "Connection refused"}, check: true, tone: toneRed, wantInStatus: "Check failed: Connection refused"},
+		{s: hostCheckState{probe: probeShadowed, probeOut: "/usr/bin/pitwall does not start: Exec format error. It is ahead"}, check: true, tone: toneRed,
+			wantInStatus: "ssh works, but /usr/bin/pitwall does not start: Exec format error. It is ahead."},
 		{s: hostCheckState{probe: probeBroken, probeOut: "/usr/bin/pitwall does not start: Exec format error"}, check: true, install: true, tone: toneRed,
 			wantInStatus: "ssh works, but /usr/bin/pitwall does not start: Exec format error."},
 		{s: hostCheckState{probe: probeNoDaemon, installing: true}, busy: true, wantInStatus: "Installing"},

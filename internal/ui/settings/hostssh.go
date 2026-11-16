@@ -22,7 +22,8 @@ const (
 	probeRunning
 	probeDaemon   // reachable, and the pitwall a window would run starts
 	probeNoDaemon // reachable, but no pitwall there
-	probeBroken   // reachable, and its pitwall does not start
+	probeBroken   // reachable, and its pitwall, the one Install replaces, does not start
+	probeShadowed // reachable, and a pitwall ahead of ~/.local/bin on the PATH does not start
 	probeFail     // ssh failed, or the host ran no sh
 )
 
@@ -30,19 +31,21 @@ const (
 // startup files print is not taken for its answer.
 const probeMark = "pitwall-probe"
 
-// probeCommand prints probeMark and three tab-separated fields: pitwall's
+// probeCommand prints probeMark and four tab-separated fields: pitwall's
 // path on the host, empty when it has none; ok or fail, whether pitwall
-// --version ran; and what that printed, on one line. It looks where a
-// window's remote-start does (cmd/pitwall's startCommand): the PATH and
-// ~/.local/bin, where get.sh installs and which the PATH of a
-// non-interactive ssh login often lacks. It runs the binary because a file
-// there proves little: a release built with the window does not start on a
-// host without the window's libraries. It always exits 0, so another exit
-// status is the host's or ssh's failure, never "no pitwall": sh's command
-// -v exits 1 in bash and 127 in dash.
-const probeCommand = `sh -c 'PATH="$PATH:$HOME/.local/bin"; p=$(command -v pitwall); r=; v=; ` +
+// --version ran; yes or no, whether that path is ~/.local/bin/pitwall, the
+// file Install writes; and what --version printed, on one line. It looks
+// where a window's remote-start does (cmd/pitwall's startCommand): the PATH
+// and then ~/.local/bin, where get-host.sh installs and which the PATH of
+// a non-interactive ssh login often lacks. It runs the binary because a
+// file there proves little: a release built with the window does not start
+// on a host without the window's libraries. It always exits 0, so another
+// exit status is the host's or ssh's failure, never "no pitwall": sh's
+// command -v exits 1 in bash and 127 in dash.
+const probeCommand = `sh -c 'PATH="$PATH:$HOME/.local/bin"; p=$(command -v pitwall); r=; v=; o=no; ` +
+	`if [ "$p" = "$HOME/.local/bin/pitwall" ]; then o=yes; fi; ` +
 	`if [ -n "$p" ]; then v=$("$p" --version 2>&1) && r=ok || r=fail; fi; ` +
-	`printf "` + probeMark + `\t%s\t%s\t%s\n" "$p" "$r" "$(printf "%s" "$v" | tr "\n\t" "  ")"'`
+	`printf "` + probeMark + `\t%s\t%s\t%s\t%s\n" "$p" "$r" "$o" "$(printf "%s" "$v" | tr "\n\t" "  ")"'`
 
 const (
 	probeTimeout   = 15 * time.Second
@@ -126,10 +129,10 @@ func probeResult(out, stderr string, err error, timedOut bool, dest string) (int
 			continue
 		}
 		f := strings.Split(rest, "\t")
-		if len(f) != 3 {
-			return probeFail, fmt.Sprintf("the host's answer has %d fields, not 3: %q", len(f), rest)
+		if len(f) != 4 {
+			return probeFail, fmt.Sprintf("the host's answer has %d fields, not 4: %q", len(f), rest)
 		}
-		path, ran, said := strings.TrimSpace(f[0]), f[1], strings.TrimSpace(f[2])
+		path, ran, installs, said := strings.TrimSpace(f[0]), f[1], f[2] == "yes", strings.TrimSpace(f[3])
 		switch {
 		case path == "":
 			return probeNoDaemon, ""
@@ -138,7 +141,19 @@ func probeResult(out, stderr string, err error, timedOut bool, dest string) (int
 		}
 		// The loader starts its message with the path too.
 		msg := fmt.Sprintf("%s does not start: %s", path, strings.TrimPrefix(said, path+": "))
-		if strings.Contains(said, "error while loading shared libraries") {
+		libs := strings.Contains(said, "error while loading shared libraries")
+		if !installs {
+			// why: a window runs the first pitwall on the PATH, so a new one
+			// in ~/.local/bin would stay behind this one and change nothing.
+			msg += ". It is ahead of ~/.local/bin on the host's PATH, so Install cannot replace it: "
+			if libs {
+				msg += "install the library named with the host's package manager, or remove this pitwall there, then check again"
+			} else {
+				msg += "remove or repair it on the host, then check again"
+			}
+			return probeShadowed, msg
+		}
+		if libs {
 			// why: the release with the window links EGL, Wayland, X11 and
 			// xkbcommon, which a host without a desktop often lacks.
 			msg += ". This pitwall release links the window's libraries: Install adds them on a host with apt-get; elsewhere install the one named with the host's package manager, then check again"

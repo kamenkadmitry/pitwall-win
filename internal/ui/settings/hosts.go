@@ -348,8 +348,9 @@ const (
 )
 
 // viewOf is s's row. Check stays on offer after every result, so a host
-// fixed by hand can be checked again; Install only when ssh works and the
-// host has no pitwall that starts.
+// fixed by hand can be checked again; Install only when ssh works and
+// installing would give the host a pitwall that a window runs: it has
+// none, or the one in ~/.local/bin does not start.
 func viewOf(s hostCheckState) hostCheckView {
 	v := hostCheckView{install: s.installOut, installFail: s.installErr}
 	if s.installing {
@@ -369,6 +370,9 @@ func viewOf(s hostCheckState) hostCheckView {
 	case probeBroken:
 		v.status, v.tone = "ssh works, but "+s.probeOut+".", toneRed
 		v.canCheck, v.canInstall = true, true
+	case probeShadowed:
+		// No Install: it writes ~/.local/bin, behind the pitwall that fails.
+		v.status, v.tone, v.canCheck = "ssh works, but "+s.probeOut+".", toneRed, true
 	case probeFail:
 		v.status, v.tone, v.canCheck = "Check failed: "+s.probeOut, toneRed, true
 	}

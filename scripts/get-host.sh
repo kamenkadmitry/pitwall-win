@@ -113,6 +113,37 @@ install_libs() {
     fi
 }
 
+# window_pitwall prints the pitwall a window's remote-start runs on this
+# host: the first on the PATH, then the one in ~/.local/bin. None prints
+# nothing.
+window_pitwall() {
+    (
+        PATH="$PATH:$HOME/.local/bin"
+        command -v pitwall
+    ) || true
+}
+
+# check_window fails when a window would not run a pitwall that starts,
+# though $1, the one just installed, does: another pitwall that does not
+# start is ahead of it on the PATH, or $1 is in a folder a window does not
+# look in. Installing changed nothing for the window then.
+check_window() {
+    runs=$(window_pitwall)
+    if [ "$runs" = "$1" ]; then
+        return 0
+    fi
+    if [ -z "$runs" ]; then
+        printf 'pitwall: a window looks for pitwall on the PATH and in ~/.local/bin, and %s is in neither\n' "$1" >&2
+        return 1
+    fi
+    if "$runs" --version >/dev/null 2>&1; then
+        printf 'A window runs %s, which is ahead of %s on the PATH of this host.\n' "$runs" "$1"
+        return 0
+    fi
+    printf 'pitwall: a window runs %s, which is ahead of %s on the PATH of this host and does not start. Remove or repair it, then check again.\n' "$runs" "$1" >&2
+    return 1
+}
+
 main() {
     for tool in curl tar awk mktemp; do
         if ! command -v "$tool" >/dev/null 2>&1; then
@@ -161,6 +192,7 @@ main() {
         exit 1
     fi
     printf 'Installed %s in %s.\n' "$said" "$dir"
+    check_window "$dir/pitwall" || exit 1
     printf 'For agent status in the sidebar, run on the host: %s hooks install\n' "$dir/pitwall"
 }
 
