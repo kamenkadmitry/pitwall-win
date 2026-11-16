@@ -24,6 +24,13 @@ takes `--dry-run`.
 
 ## Unreleased
 
+- pitwall-win is made from upstream v0.2.14 instead of v0.2.13; `## v0.2.14` below lists what that brings. Its lines about Linux, such as the JSON socket and pitwall-core, describe a Linux pitwall: the one on a host, not this Windows build.
+- Install in the host editor, and the install command `pitwall --host` prints, put upstream v0.2.14 on a host: the pin follows the release this build was made from.
+- A window runs `pitwall-core` on a host that has one, and `pitwall` only otherwise, as upstream does since v0.2.14. Check connection in the host editor and `scripts/get-host.sh` test the one a window would run, so a host with both no longer gets a verdict on the wrong binary. A pitwall-core that does not start reads red and offers no Install: Install writes `~/.local/bin/pitwall`, which a window would not reach past it.
+- Install in the host editor still installs the full pitwall with the libraries it links, not pitwall-core, and this repository's releases still carry Windows builds only: upstream's release job for pitwall-core is not taken.
+
+## v0.2.13-win.2
+
 - The host editor on Settings, Hosts offers a filterable dropdown of the machine names ssh already knows from `~/.ssh/config` and previews the `[[hosts]]` table it will write. A new host's "in every window" switch defaults on, a pasted `ssh ` prefix in the ssh field is dropped, and the field's help says it takes the destination only.
 - Check connection in the host editor probes the destination over ssh and says whether the host has a pitwall that starts. It looks where a window does, on the host's `PATH` and in `~/.local/bin`, and runs `pitwall --version` there. Green names the version and its path, yellow means the host has none, and red gives the loader's reason for a pitwall that does not start, or what ssh said, with what to do about an unknown host key or a login that needs a password. Save activates after a green check of the destination the fields name, and Enter in a field holds the same gate. A saved host whose destination is unchanged saves without a check, so "in every window" can go off while the machine is down.
 - Install in the host editor puts pitwall on a Linux host that has none. It feeds `scripts/get-host.sh`, which the binary carries, to `sh` on the host over ssh. The script installs the upstream release this build was made from, `v0.2.13`, and first the shared libraries that release links and the host lacks, such as `libxkbcommon-x11`: with `apt-get`, as root or through a sudo that asks no password. Without `apt-get` or that sudo it stops and says what to install. It runs the new pitwall before putting it in place, so a release that does not start on the host, as on one without glibc, installs nothing. It fails when a window would still run another pitwall that does not start, one ahead of `~/.local/bin` on the host's `PATH`; Check connection names that one and offers no Install, which could not replace it.
@@ -31,12 +38,6 @@ takes `--dry-run`.
 - `scripts/get.ps1` checks the environment before installing: the cmdlets it needs, the arch, a writable install dir, a writable user PATH, and that github.com answers — each check prints, and any failure stops the install. A progress bar tracks the stages.
 - A pitwall built from a Windows checkout embeds its agent skill with LF line ends: with CRLF it was a file no release wrote, so an unedited install of the skill read as edited and was never refreshed.
 - CI runs on Windows only; the checks of the linux and macOS legs that still matter (gofmt, the script tests, both release arches, the vendored module) moved into the Windows leg. Its gofmt check no longer fails by chance: it set LF line ends after the checkout, which rewrote only part of the tree.
-
-## v0.2.13-win.1
-
-- On Windows, `pitwall --host` and `[[hosts]]` now work: Microsoft's ssh has no connection sharing, so the socket forward is a dedicated `ssh -N -L` to a loopback TCP port that the window dials, and it ends when the window's connection closes. `[[hosts]] window = true` shows a host's sessions next to this machine's.
-- Settings has a Hosts category: it lists `[[hosts]]` with each entry's ssh destination and window flag, and a form adds, edits and removes entries through the new `config.SetHost`, which edits a `[[hosts]]` table in place as `SetPreset` does a preset.
-- The forward's `ssh -N -L` on Windows now sits in a job object with `KILL_ON_JOB_CLOSE`, so a window that crashes or is killed leaves no ssh holding the port. `pitwall update` and `get.ps1` point at this repository's releases, not upstream's, which ships no Windows remote support.
 
 ## v0.2.14
 
@@ -54,6 +55,12 @@ takes `--dry-run`.
 - On Linux, `worktreeNew`, the queue commands, `hostCheck` and `adopt` on `$PITWALL_SOCKET` match the CLI for tabs on this machine.
 - A command that an older or newer daemon turns away always says so and names `pitwall update`; it sometimes printed `broken pipe`.
 - The pitwall skill shows how a script drives pitwall over `$PITWALL_SOCKET` without the CLI.
+
+## v0.2.13-win.1
+
+- On Windows, `pitwall --host` and `[[hosts]]` now work: Microsoft's ssh has no connection sharing, so the socket forward is a dedicated `ssh -N -L` to a loopback TCP port that the window dials, and it ends when the window's connection closes. `[[hosts]] window = true` shows a host's sessions next to this machine's.
+- Settings has a Hosts category: it lists `[[hosts]]` with each entry's ssh destination and window flag, and a form adds, edits and removes entries through the new `config.SetHost`, which edits a `[[hosts]]` table in place as `SetPreset` does a preset.
+- The forward's `ssh -N -L` on Windows now sits in a job object with `KILL_ON_JOB_CLOSE`, so a window that crashes or is killed leaves no ssh holding the port. `pitwall update` and `get.ps1` point at this repository's releases, not upstream's, which ships no Windows remote support.
 
 ## v0.2.13
 
