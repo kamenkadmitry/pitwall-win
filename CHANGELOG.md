@@ -22,6 +22,10 @@ Without that key or the Android SDK/NDK, tagging still succeeds and prints
 the retry command, `sh scripts/apk-release.sh vX.Y.Z`. Either release step
 takes `--dry-run`.
 
+## Unreleased
+
+- Settings, Hosts offers Restart window when the hosts this window shows differ from `[[hosts]]`: a window reads its hosts once, when it starts, so a host added in the editor was missing from the + menu and the sidebar with no word of why. The row names the hosts that are not in the window yet, are still in it, are on their old ssh destination or are in their old order; the button reopens the window on the same session and tab, or on a session of this machine when the one shown is another host's, and the tabs keep running in the daemon meanwhile. A `pitwall --host` window, which shows its one host whatever `[[hosts]]` says, has no such row.
+
 ## v0.2.14-win.1
 
 - pitwall-win is made from upstream v0.2.14 instead of v0.2.13; `## v0.2.14` below lists what that brings. Its lines about Linux, such as the JSON socket and pitwall-core, describe a Linux pitwall: the one on a host, not this Windows build.

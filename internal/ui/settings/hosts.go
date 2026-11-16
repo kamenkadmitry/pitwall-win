@@ -230,6 +230,11 @@ func (p *Page) hosts() []section {
 		return []section{p.hostForm(btn)}
 	}
 	var rows []row
+	if change := windowHostsChange(p.s.Hosts, p.WindowHosts); change != "" && !p.OneHost {
+		rows = append(rows, row{label: "Restart this window", desc: change + " A window reads its hosts when it starts; the tabs keep running while it restarts.",
+			extra: "host restart window reload apply show", control: btn("host-restart", "Restart window", primary, func() { p.result = RestartWindow }),
+			below: p.restartErr})
+	}
 	for _, h := range p.s.Hosts {
 		h := h
 		desc := cmp.Or(h.SSH, h.Name)
@@ -243,8 +248,65 @@ func (p *Page) hosts() []section {
 		extra: "host add new ssh remote machine", control: btn("host-new", "New host", primary, func() { p.editHost(nil) })})
 	return []section{{
 		title: "Hosts",
-		desc:  "pitwall --host <name> opens a window on the host alone; window on also shows its sessions in every window, under its own heading. Windows pick a change up the next time they start.",
+		desc:  "pitwall --host <name> opens a window on the host alone; window on also shows its sessions in every window, under its own heading. A window reads this list when it starts; after a change, Restart window appears here.",
 		rows:  rows, anchor: true}}
+}
+
+// windowHostsChange says how the hosts a window shows, shown, differ from
+// the [[hosts]] entries with window = true, which a window started now
+// would show. "" means they are the same.
+func windowHostsChange(hosts []config.Host, shown []WindowHost) string {
+	now := map[string]string{}
+	var want []string
+	for _, h := range hosts {
+		if h.Window && h.Name != "" {
+			now[h.Name] = cmp.Or(h.SSH, h.Name)
+			want = append(want, h.Name)
+		}
+	}
+	was := map[string]string{}
+	var have, added, removed, moved []string
+	for _, h := range shown {
+		was[h.Name] = h.SSH
+		have = append(have, h.Name)
+		switch dest, ok := now[h.Name]; {
+		case !ok:
+			removed = append(removed, h.Name)
+		case dest != h.SSH:
+			moved = append(moved, h.Name)
+		}
+	}
+	for _, name := range want {
+		if _, ok := was[name]; !ok {
+			added = append(added, name)
+		}
+	}
+	var parts []string
+	if len(added) > 0 {
+		parts = append(parts, "Not in this window yet: "+strings.Join(added, ", ")+".")
+	}
+	if len(removed) > 0 {
+		parts = append(parts, "Still in this window: "+strings.Join(removed, ", ")+".")
+	}
+	if len(moved) > 0 {
+		parts = append(parts, "On its old ssh destination in this window: "+strings.Join(moved, ", ")+".")
+	}
+	// The same hosts in another order: a window lists them as [[hosts]]
+	// did when it started.
+	if len(parts) == 0 && !slices.Equal(want, have) {
+		parts = append(parts, "In this window the hosts are in their old order: "+strings.Join(have, ", ")+".")
+	}
+	return strings.Join(parts, " ")
+}
+
+// restartErr is why the window did not restart, under the Restart row.
+func (p *Page) restartErr(gtx gl.Context) gl.Dimensions {
+	if p.RestartErr == "" {
+		return gl.Dimensions{}
+	}
+	return gl.Inset{Top: 6}.Layout(gtx, func(gtx gl.Context) gl.Dimensions {
+		return p.para(gtx, p.th.UIFont, p.th.Sp(theme.Small), p.th.Red, "The window did not restart: "+p.RestartErr)
+	})
 }
 
 // hostForm is the editor's rows.

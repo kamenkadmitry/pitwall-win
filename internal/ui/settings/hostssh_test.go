@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/quanticstudios/pitwall/internal/config"
 	"github.com/quanticstudios/pitwall/scripts"
 )
 
@@ -326,5 +327,62 @@ func TestLastLines(t *testing.T) {
 	}
 	if got := lastLines("one", 4); got != "one" {
 		t.Fatalf("lastLines = %q", got)
+	}
+}
+
+// A window reads its hosts when it starts. Hosts says how they differ from
+// [[hosts]] now and offers a restart, except in a pitwall --host window.
+func TestWindowHostsChange(t *testing.T) {
+	cfg := []config.Host{
+		{Name: "alter-core", SSH: "alter-core", Window: true},
+		{Name: "nocobase", Window: true},
+		{Name: "quiet", SSH: "me@quiet"}, // no window = true: in no window
+	}
+	for i, c := range []struct {
+		shown []WindowHost
+		want  string
+	}{
+		{[]WindowHost{{"alter-core", "alter-core"}, {"nocobase", "nocobase"}}, ""},
+		{[]WindowHost{{"alter-core", "alter-core"}}, "Not in this window yet: nocobase."},
+		{nil, "Not in this window yet: alter-core, nocobase."},
+		{[]WindowHost{{"alter-core", "alter-core"}, {"nocobase", "nocobase"}, {"gone", "gone"}}, "Still in this window: gone."},
+		{[]WindowHost{{"alter-core", "me@old"}, {"nocobase", "nocobase"}}, "On its old ssh destination in this window: alter-core."},
+		{[]WindowHost{{"alter-core", "me@old"}, {"quiet", "me@quiet"}},
+			"Not in this window yet: nocobase. Still in this window: quiet. On its old ssh destination in this window: alter-core."},
+	} {
+		if got := windowHostsChange(cfg, c.shown); got != c.want {
+			t.Errorf("%d: windowHostsChange = %q, want %q", i, got, c.want)
+		}
+	}
+	// The same hosts, listed in another order in config.toml.
+	if got, want := windowHostsChange(cfg, []WindowHost{{"nocobase", "nocobase"}, {"alter-core", "alter-core"}}), "In this window the hosts are in their old order: nocobase, alter-core."; got != want {
+		t.Errorf("another order: %q, want %q", got, want)
+	}
+	if got := windowHostsChange(nil, nil); got != "" {
+		t.Errorf("no hosts at all: %q", got)
+	}
+
+	restartRow := func(p *Page) bool {
+		for _, sec := range p.hosts() {
+			for _, r := range sec.rows {
+				if r.label == "Restart this window" {
+					return strings.Contains(r.desc, "Not in this window yet: nocobase.")
+				}
+			}
+		}
+		return false
+	}
+	p := &Page{WindowHosts: []WindowHost{{"alter-core", "alter-core"}}}
+	p.s.Hosts = cfg
+	if !restartRow(p) {
+		t.Error("Hosts offers no restart for a host this window does not show")
+	}
+	p.WindowHosts = append(p.WindowHosts, WindowHost{"nocobase", "nocobase"})
+	if restartRow(p) {
+		t.Error("Hosts offers a restart to a window that shows every host")
+	}
+	p.WindowHosts, p.OneHost = nil, true
+	if restartRow(p) {
+		t.Error("Hosts offers a restart in a pitwall --host window")
 	}
 }

@@ -49,7 +49,15 @@ const (
 	InstallHooks             // open the Install hooks dialog
 	InstallStatusline        // open it with pitwall statusline ticked
 	AskAgent                 // open the New task dialog with TaskPrompt
+	RestartWindow            // reopen this window, so it reads [[hosts]] again
 )
+
+// WindowHost is a host a window shows next to this machine: a [[hosts]]
+// entry with window = true, as the window read it when it started.
+type WindowHost struct {
+	Name string
+	SSH  string // the ssh destination: the entry's ssh, else its name
+}
 
 const (
 	catAppearance = iota
@@ -94,6 +102,15 @@ type Page struct {
 	// Skillshare shows skillshare's key: the window sets it while the CLI
 	// is on the focused tab's machine.
 	Skillshare bool
+	// WindowHosts are the hosts this window shows next to this machine. A
+	// window reads them once, when it starts, so Hosts offers a restart
+	// while they differ from [[hosts]].
+	WindowHosts []WindowHost
+	// OneHost is set in a pitwall --host window, which shows that host
+	// whatever [[hosts]] says: Hosts offers no restart there.
+	OneHost bool
+	// RestartErr is why the last RestartWindow did not reopen the window.
+	RestartErr string
 
 	shown  bool
 	cat    int
