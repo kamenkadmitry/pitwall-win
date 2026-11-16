@@ -64,6 +64,13 @@ jobs:
       run:
         shell: bash
     steps:
+      # why: the runner's git checks out CRLF, gofmt counts the \r as
+      # unformatted and sh reads it as part of a command. The setting has to
+      # be there before the checkout: git checkout-index -f afterwards leaves
+      # every file whose stat data the index still matches as it is, so it
+      # rewrote only the files checked out last and gofmt failed on the rest.
+      - name: Check out with LF line ends
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
@@ -73,12 +80,7 @@ jobs:
           # why: a hung Windows test can hold a file in the build cache, failing the cache save.
           cache: false
       - name: gofmt
-        # why: the Windows checkout lands CRLF and gofmt counts the \r, so
-        # every file would read as unformatted. Re-write the worktree as
-        # LF first; the repo never stores the other form.
         run: |
-          git config --global core.autocrlf false
-          git checkout-index -f -a
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
             printf 'gofmt needed:\n%s\n' "$unformatted"
