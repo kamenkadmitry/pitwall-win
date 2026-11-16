@@ -15,7 +15,9 @@ import (
 	"gioui.org/op/paint"
 	"gioui.org/widget"
 
+	"github.com/quanticstudios/pitwall/internal/agent"
 	"github.com/quanticstudios/pitwall/internal/layout"
+	"github.com/quanticstudios/pitwall/internal/model"
 	"github.com/quanticstudios/pitwall/internal/ui/anim"
 	"github.com/quanticstudios/pitwall/internal/ui/kit"
 	"github.com/quanticstudios/pitwall/internal/ui/theme"
@@ -54,6 +56,18 @@ func (u *ui) hooksNotice() bool {
 	u.hooks.mu.Lock()
 	defer u.hooks.mu.Unlock()
 	return InstallHooks != nil && !u.hooks.hidden
+}
+
+// pickingSession reports a Claude Code pane showing its list of sessions to
+// resume, where no hook is due yet: `claude --resume` sends none until a
+// session is picked.
+// why: a host runs its own pitwall, and one from before the daemon knew that list marks such a pane.
+func (u *ui) pickingSession(pn *model.Pane) bool {
+	if pn.Provider != model.ProviderClaude {
+		return false
+	}
+	g, _, ok := u.b.Frame(pn.ID)
+	return ok && agent.SessionPicker(g)
 }
 
 // openHooks shows the dialog and starts its dry run, with the statusline

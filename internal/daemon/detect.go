@@ -163,7 +163,7 @@ func (d *Daemon) lookAt(ctx context.Context, l look) {
 		d.live.det[l.id] = det
 	}
 	det.sid = l.sid
-	d.noteHooks(l.id, det, prov, screen, l.hooked, fresh)
+	d.noteHooks(l.id, det, prov, screen, trace.Rule == agent.SessionPickerRule, l.hooked, fresh)
 	var prev model.AgentState
 	if i := d.activityIndex(l.id); i >= 0 {
 		a := d.st.Activities[i]
@@ -182,10 +182,13 @@ func (d *Daemon) lookAt(ctx context.Context, l look) {
 	case prov != "":
 		s := screen
 		rule := trace.Rule
-		if s == "" && prev == model.StateWorking && !slices.Equal(det.cells, g.Cells) {
+		switch {
+		case rule == agent.SessionPickerRule:
+			// why: Done kept under the list of sessions to resume would let a finished worker close with the list open.
+		case s == "" && prev == model.StateWorking && !slices.Equal(det.cells, g.Cells):
 			rule = "screen-moving"
 			s = model.StateWorking // a reply streaming with the spinner hidden
-		} else if s == "" && (prev == model.StateWorking || prev == model.StateCompleted) {
+		case s == "" && (prev == model.StateWorking || prev == model.StateCompleted):
 			rule = "screen-still"
 			s = model.StateCompleted
 		}
@@ -213,8 +216,10 @@ func (d *Daemon) lookAt(ctx context.Context, l look) {
 // it while its screen showed a turn for three polls, or, for an agent
 // whose hooks report its start, for hookGrace after it was seen starting.
 // An agent already running when the daemon started may have reported to
-// the daemon before, so time alone never flags it. Callers hold d.mu.
-func (d *Daemon) noteHooks(id string, det *detected, prov model.Provider, screen model.AgentState, hooked, fresh bool) {
+// the daemon before, so time alone never flags it. picking, Claude Code
+// showing its list of sessions to resume, holds that clock: no session has
+// started yet. Callers hold d.mu.
+func (d *Daemon) noteHooks(id string, det *detected, prov model.Provider, screen model.AgentState, picking, hooked, fresh bool) {
 	kind := prov
 	if !agent.HooksFor(kind) {
 		kind = ""
@@ -224,6 +229,10 @@ func (d *Daemon) noteHooks(id string, det *detected, prov model.Provider, screen
 		if kind != "" && !fresh {
 			det.since = time.Now()
 		}
+	}
+	if picking && !det.since.IsZero() {
+		// why: Claude Code sends no hook until a session is picked from the list of `claude --resume`.
+		det.since = time.Now()
 	}
 	if screen != "" {
 		det.turns++

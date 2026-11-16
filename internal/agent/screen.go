@@ -68,6 +68,11 @@ func (p *screenPatterns) readScreen(g vt.Grid, trace *ScreenTrace) Screen {
 func State(g vt.Grid) model.AgentState { return activePatterns.Load().state(g, nil) }
 
 func (p *screenPatterns) state(g vt.Grid, trace *ScreenTrace) model.AgentState {
+	if trace.check(SessionPickerRule, sessionPickerTitle, sessionPickerTitle, SessionPicker(g)) {
+		// why: the list's footer ends in "Esc to cancel" as an approval's does, and it asks for none.
+		trace.decide("picker")
+		return ""
+	}
 	if ReadQuestion(model.ProviderClaude, g) != nil || ReadQuestion(model.ProviderCodex, g) != nil {
 		trace.decide("input")
 		return model.StateAwaitingInput
@@ -93,6 +98,25 @@ func (p *screenPatterns) state(g vt.Grid, trace *ScreenTrace) model.AgentState {
 	}
 	trace.decide("form")
 	return model.StatePendingApproval
+}
+
+// SessionPickerRule is the ScreenTrace.Rule of a screen SessionPicker reports.
+const SessionPickerRule = "picker/" + sessionPickerTitle
+
+const sessionPickerTitle = "Resume session"
+
+// SessionPicker reports Claude Code's list of sessions to resume, which
+// `claude --resume` shows before it starts a session and /resume shows in
+// one: its title row with the search box under it. Claude Code sends no
+// hook, SessionStart included, while the list of `claude --resume` is up.
+// ReadScreen still reads it as ScreenForm: it takes the keys typed into it.
+func SessionPicker(g vt.Grid) bool {
+	for y := 0; y+1 < g.Rows; y++ {
+		if strings.TrimSpace(rowText(g, y)) == sessionPickerTitle && strings.HasPrefix(strings.TrimSpace(rowText(g, y+1)), "╭") {
+			return true
+		}
+	}
+	return false
 }
 
 // StateOf is State for Claude, Codex and pi, provider-specific text rules

@@ -34,6 +34,7 @@ func TestReadScreen(t *testing.T) {
 		"claude-spinner.txt":            ScreenBusy,
 		"claude-permission.txt":         ScreenForm,
 		"claude-permission-warning.txt": ScreenForm,
+		"claude-resume-picker.txt":      ScreenForm, // it takes the keys typed into it
 		"tuios-claude-code-working.txt": ScreenBusy,
 		"tuios-codex-working.txt":       ScreenBusy,
 		"tuios-codex-approval.txt":      ScreenForm,
@@ -109,6 +110,7 @@ func TestState(t *testing.T) {
 		"claude-spinner.txt":            model.StateWorking,
 		"claude-permission.txt":         model.StatePendingApproval,
 		"claude-permission-warning.txt": model.StatePendingApproval,
+		"claude-resume-picker.txt":      "", // a list to pick from, no approval
 		"tuios-claude-question.txt":     model.StateAwaitingInput,
 		"claude-idle.txt":               "",
 		"claude-streaming.txt":          "",
@@ -199,5 +201,27 @@ func TestScript(t *testing.T) {
 		if got := Script(tc.argv); got != tc.want {
 			t.Errorf("Script(%q) = %q, want %q", tc.argv, got, tc.want)
 		}
+	}
+}
+
+// claude-resume-picker.txt is Claude Code 2.1.325's list of `claude
+// --resume`, read as the other fixtures are, with the sessions renamed.
+func TestSessionPicker(t *testing.T) {
+	picker := screenFixture(t, "claude-resume-picker.txt")
+	if !SessionPicker(picker) {
+		t.Error("the list of sessions to resume not seen")
+	}
+	if trace := ExplainScreen(model.ProviderClaude, picker); trace.State != "" || trace.Rule != SessionPickerRule {
+		t.Errorf("the list's trace: state %q, rule %q", trace.State, trace.Rule)
+	}
+	for _, file := range []string{"claude-permission.txt", "claude-idle.txt", "claude-model-menu.txt", "codex-trust.txt"} {
+		if SessionPicker(screenFixture(t, file)) {
+			t.Errorf("%s read as the list of sessions to resume", file)
+		}
+	}
+	// A reply that names the list, over an approval, is still an approval.
+	quoted := gridOf("Resume session", "is the title of that list.", "", " Do you want to proceed?", " ❯ 1. Yes", "   2. No", " Esc to cancel")
+	if SessionPicker(quoted) || State(quoted) != model.StatePendingApproval {
+		t.Errorf("a reply naming the list: picker %v, state %q", SessionPicker(quoted), State(quoted))
 	}
 }

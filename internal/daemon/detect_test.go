@@ -369,3 +369,53 @@ func TestHooksMissingSkipsAgentFoundRunning(t *testing.T) {
 		t.Fatal("an agent found running marked by time")
 	}
 }
+
+// `claude --resume` sends no hook until a session is picked from its list,
+// so a pane showing the list is not marked, however long it does; the wait
+// for the first hook starts once the list is gone.
+func TestHooksMissingWaitsForSessionPick(t *testing.T) {
+	old := hookGrace
+	hookGrace = 50 * time.Millisecond
+	t.Cleanup(func() { hookGrace = old })
+
+	d, lp, id := openLive(t, 200)
+	lp.show("❯ ", false)
+	polls()
+	// The test pane is six rows tall.
+	lp.show("  Resume session\n  ╭──────────╮\n  │ ⌕ Search… │\n  ╰──────────╯\n  ❯ Fix the login test\n    Type to search · Esc to cancel", false)
+	lp.fgGroup.Store(100) // claude --resume, with hooks or without
+	waitUntil(t, "claude seen", func() bool { return d.providerOf(id) == model.ProviderClaude })
+	time.Sleep(4 * hookGrace)
+	polls()
+	if d.hooksMissing(id) {
+		t.Fatal("a pane showing the list of sessions to resume marked")
+	}
+	if s := d.stateOf(id); s != "" {
+		t.Fatalf("the list read as state %q", s)
+	}
+	lp.show("❯ ", false) // a session picked, and still no hook
+	waitUntil(t, "claude without hooks marked", func() bool { return d.hooksMissing(id) })
+}
+
+// A turn that ended reads Done while the screen is still. Under the list of
+// sessions to resume it must not: a finished worker closes, and the list
+// would go with it. Moving through the list is no turn either.
+func TestSessionPickerDropsDone(t *testing.T) {
+	const list = "  Resume session\n  ╭──────────╮\n  │ ⌕ Search… │\n  ╰──────────╯\n  ❯ Fix the login test"
+	d, lp, id := openLive(t, 200)
+	lp.show(spinnerScreen, false)
+	lp.fgGroup.Store(100) // claude started from the shell, without hooks
+	waitUntil(t, "working", func() bool { return d.stateOf(id) == model.StateWorking })
+	lp.show(list, true) // /resume in the turn, the cursor moving through the list
+	waitUntil(t, "no state under the list in a turn", func() bool { return d.stateOf(id) == "" })
+	lp.show(spinnerScreen, false)
+	waitUntil(t, "working again", func() bool { return d.stateOf(id) == model.StateWorking })
+	lp.show(idleScreen, false)
+	waitUntil(t, "completed", func() bool { return d.stateOf(id) == model.StateCompleted })
+	lp.show(list, false) // /resume after the turn
+	waitUntil(t, "no state under the list", func() bool { return d.stateOf(id) == "" })
+	polls()
+	if s := d.stateOf(id); s != "" {
+		t.Fatalf("the list read as %q after a finished turn", s)
+	}
+}
