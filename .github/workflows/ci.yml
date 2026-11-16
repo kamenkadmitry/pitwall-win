@@ -73,7 +73,12 @@ jobs:
           # why: a hung Windows test can hold a file in the build cache, failing the cache save.
           cache: false
       - name: gofmt
+        # why: the Windows checkout lands CRLF and gofmt counts the \r, so
+        # every file would read as unformatted. Re-write the worktree as
+        # LF first; the repo never stores the other form.
         run: |
+          git config --global core.autocrlf false
+          git checkout-index -f -a
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
             printf 'gofmt needed:\n%s\n' "$unformatted"
