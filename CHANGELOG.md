@@ -24,6 +24,8 @@ takes `--dry-run`.
 
 ## Unreleased
 
+- The host editor on Settings, Hosts offers the machine names ssh already knows from `~/.ssh/config`, previews the `[[hosts]]` table it will write, and checks the connection over ssh: whether the host answers and has pitwall on its PATH, with an Install button that runs `get.sh --core` there. A pasted `ssh ` prefix in the ssh field is dropped, and the field's help now says the destination only.
+
 ## v0.2.13-win.1
 
 - On Windows, `pitwall --host` and `[[hosts]]` now work: Microsoft's ssh has no connection sharing, so the socket forward is a dedicated `ssh -N -L` to a loopback TCP port that the window dials, and it ends when the window's connection closes. `[[hosts]] window = true` shows a host's sessions next to this machine's.
