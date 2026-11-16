@@ -80,9 +80,9 @@ func TestProbeResult(t *testing.T) {
 		{out: "pitwall-probe\t/home/me/.local/bin/pitwall\tfail\tyes\tExec format error\n", want: probeBroken, wantOut: "/home/me/.local/bin/pitwall does not start: Exec format error"},
 		// One ahead of ~/.local/bin on the PATH is not Install's to replace.
 		{out: "pitwall-probe\t/usr/local/bin/pitwall\tfail\tno\tExec format error\n", want: probeShadowed,
-			wantOut: "/usr/local/bin/pitwall does not start: Exec format error. It is ahead of ~/.local/bin on the host's PATH, so Install cannot replace it: remove or repair it on the host, then check again"},
+			wantOut: "/usr/local/bin/pitwall does not start: Exec format error. A window runs this one, not ~/.local/bin/pitwall, which Install writes, so Install cannot replace it: remove or repair it on the host, then check again"},
 		{out: "pitwall-probe\t/usr/bin/pitwall\tfail\tno\t/usr/bin/pitwall: error while loading shared libraries: libEGL.so.1: cannot open shared object file\n", want: probeShadowed,
-			wantOut: "/usr/bin/pitwall does not start: error while loading shared libraries: libEGL.so.1: cannot open shared object file. It is ahead of ~/.local/bin on the host's PATH, so Install cannot replace it: install the library named with the host's package manager, or remove this pitwall there, then check again"},
+			wantOut: "/usr/bin/pitwall does not start: error while loading shared libraries: libEGL.so.1: cannot open shared object file. A window runs this one, not ~/.local/bin/pitwall, which Install writes, so Install cannot replace it: install the library named with the host's package manager, or remove this pitwall there, then check again"},
 		{out: "pitwall-probe\t/usr/bin/pitwall\tok\tpitwall v0.2.13\n", want: probeFail, wantOut: `the host's answer has 3 fields, not 4: "/usr/bin/pitwall\tok\tpitwall v0.2.13"`},
 		{out: "motd\n", want: probeFail, wantOut: `the host ran no sh: it printed "motd"`},
 		{stderr: "kex_exchange_identification: read: Connection reset by peer\nssh: connect to host box port 22: Connection refused\n", err: exit(255),
@@ -173,11 +173,27 @@ func TestProbeCommand(t *testing.T) {
 	script(t, filepath.Join(ahead, "pitwall"), "echo 'Exec format error' >&2; exit 126")
 	out, err = asHost(probeCommand, "", home, []string{ahead, shDir})
 	st, msg = probeResult(out, "", err, false, "box")
-	if st != probeShadowed || !strings.Contains(msg, "/pitwall does not start: Exec format error. It is ahead of ~/.local/bin") {
+	if st != probeShadowed || !strings.Contains(msg, "/pitwall does not start: Exec format error. A window runs this one, not ~/.local/bin/pitwall") {
 		t.Fatalf("a broken pitwall ahead of ~/.local/bin: probe printed %q, %v, read as %d, %q", out, err, st, msg)
 	}
 	if v := viewOf(hostCheckState{probe: st, probeOut: msg}); v.canInstall || !v.canCheck {
 		t.Fatalf("a broken pitwall ahead of ~/.local/bin offers Install: %+v", v)
+	}
+	// A window runs a pitwall-core in preference to any pitwall, so the
+	// probe reports that one: a good one beats a broken pitwall on the
+	// PATH, and a broken one is not Install's to replace either.
+	core := filepath.Join(home, ".local", "bin", "pitwall-core")
+	script(t, core, `[ "$1" = --version ] && echo "pitwall-core v0.2.14"`)
+	out, err = asHost(probeCommand, "", home, []string{ahead, shDir})
+	st, msg = probeResult(out, "", err, false, "box")
+	if st != probeDaemon || !strings.HasPrefix(msg, "pitwall-core v0.2.14 at ") || !strings.HasSuffix(msg, "/.local/bin/pitwall-core") {
+		t.Fatalf("a pitwall-core next to a pitwall: probe printed %q, %v, read as %d, %q", out, err, st, msg)
+	}
+	script(t, core, "echo 'Exec format error' >&2; exit 126")
+	out, err = asHost(probeCommand, "", home, []string{shDir})
+	st, msg = probeResult(out, "", err, false, "box")
+	if st != probeShadowed || !strings.Contains(msg, "/pitwall-core does not start: Exec format error. A window runs this one") {
+		t.Fatalf("a broken pitwall-core next to a good pitwall: probe printed %q, %v, read as %d, %q", out, err, st, msg)
 	}
 }
 
