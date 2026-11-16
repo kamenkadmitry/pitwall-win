@@ -1,0 +1,16 @@
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  Resume session
+  ╭────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ ⌕ Search…                                                                                      │
+  ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
+    project
+
+  ❯ Fix the login test
+    2 seconds ago · main · 15.7MB
+
+    Rename the config keys
+    3 hours ago · config-keys · 10.3MB
+
+    Ctrl+A to show all projects · Ctrl+B to only show current branch · Space to preview · Ctrl+R
+    to rename · Type to search · Esc to cancel

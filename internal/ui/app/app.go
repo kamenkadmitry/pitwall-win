@@ -1258,7 +1258,7 @@ func (u *ui) layoutPanes(gtx gl.Context, st *model.State) {
 			att = &a
 		}
 		u.layoutPane(gtx, st, p, id, r, id == focused, findFocus && id == u.find.pane, sole, att)
-		if pn != nil && pn.HooksMissing && !u.welcome.on && u.hooksNotice() { // the welcome card offers the install already
+		if pn != nil && pn.HooksMissing && !u.welcome.on && u.hooksNotice() && !u.pickingSession(pn) { // the welcome card offers the install already
 			u.drawHooksNotice(gtx, p, r)
 		}
 		if id == zoom {
