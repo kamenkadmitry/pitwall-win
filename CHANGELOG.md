@@ -22,6 +22,13 @@ Without that key or the Android SDK/NDK, tagging still succeeds and prints
 the retry command, `sh scripts/apk-release.sh vX.Y.Z`. Either release step
 takes `--dry-run`.
 
+## Unreleased
+
+- pitwall-win is made from upstream v0.2.14 instead of v0.2.13; `## v0.2.14` below lists what that brings. Its lines about Linux, such as the JSON socket and pitwall-core, describe a Linux pitwall: the one on a host, not this Windows build.
+- Install in the host editor, and the install command `pitwall --host` prints, put upstream v0.2.14 on a host: the pin follows the release this build was made from.
+- A window runs `pitwall-core` on a host that has one, and `pitwall` only otherwise, as upstream does since v0.2.14. Check connection in the host editor and `scripts/get-host.sh` test the one a window would run, so a host with both no longer gets a verdict on the wrong binary. A pitwall-core that does not start reads red and offers no Install: Install writes `~/.local/bin/pitwall`, which a window would not reach past it.
+- Install in the host editor still installs the full pitwall with the libraries it links, not pitwall-core, and this repository's releases still carry Windows builds only: upstream's release job for pitwall-core is not taken.
+
 ## v0.2.13-win.2
 
 - The host editor on Settings, Hosts offers a filterable dropdown of the machine names ssh already knows from `~/.ssh/config` and previews the `[[hosts]]` table it will write. A new host's "in every window" switch defaults on, a pasted `ssh ` prefix in the ssh field is dropped, and the field's help says it takes the destination only.
@@ -31,6 +38,23 @@ takes `--dry-run`.
 - `scripts/get.ps1` checks the environment before installing: the cmdlets it needs, the arch, a writable install dir, a writable user PATH, and that github.com answers — each check prints, and any failure stops the install. A progress bar tracks the stages.
 - A pitwall built from a Windows checkout embeds its agent skill with LF line ends: with CRLF it was a file no release wrote, so an unedited install of the skill read as edited and was never refreshed.
 - CI runs on Windows only; the checks of the linux and macOS legs that still matter (gofmt, the script tests, both release arches, the vendored module) moved into the Windows leg. Its gofmt check no longer fails by chance: it set LF line ends after the checkout, which rewrote only part of the tree.
+
+## v0.2.14
+
+- `pitwall adopt` runs; since v0.2.13 it printed the usage text and exited 2.
+- A Claude Code tab whose turn ended now goes to Done when the Stop hook lists only Claude Code's own background work, such as an auto-mode scan, a dream or an idle teammate. Only shell commands, the Monitor tool, MCP monitors and tasks, subagents and workflows keep it Working, and while they do its card shows the turn's last reply instead of an old status line. A later SubagentStop that lists none of them left also moves the tab to Done. The full reply stays available to `pitwall read`, and a requested review is delivered when the tab reaches Done.
+- A guarded tab starts only after its hook binary runs and denies a test command, and pitwall's pi, omp and OpenCode guard denies a command when `pitwall guard` cannot run. Run `pitwall hooks install` again if you use the guard with pi, omp or OpenCode.
+- On Linux the daemon's socket, `$PITWALL_SOCKET`, answers the web protocol's `hello` as JSON lines, with no token; the control commands come next.
+- `CGO_ENABLED=0 go build -tags nogui -o pitwall-core ./cmd/pitwall` builds pitwall-core, a static binary with the daemon and every command but the window, for servers, containers and arm64 boards.
+- Releases include pitwall-core for Linux amd64 and arm64. `curl -fsSL .../get.sh | sh -s -- --core` installs it and links `pitwall` to it when that name is free, and `pitwall-core update` installs the next pitwall-core and hands the running daemon over.
+- On Linux, `listTabs`, `readPane`, `scrollback` and `waitPane` on `$PITWALL_SOCKET` do what `ls --json`, `read`, `scrollback` and `wait` do, and `subscribeTabs` pushes the tab list as it changes; `docs/examples` has a Python and a shell client.
+- A host with only pitwall-core works with `pitwall --host` and `new --host`; hooks written through a `pitwall` link or by the other binary count as installed; `doctor` warns when pitwall and pitwall-core in one folder differ.
+- Restarting the daemon from the window hands the panes to the new version with their programs running. `pitwall update` no longer stops programs when the handoff fails: the old daemon keeps serving, and `pitwall update --restart` restarts it. A daemon started from this release refuses the handoff when systemd runs it as a service, since the unit would stop its panes. Updating from v0.2.13 or earlier with panes you want to keep: install with the install script first, then run `pitwall update`. Old daemons under systemd lack the guard: install the binary without running `update`, then restart the unit when you can stop its panes.
+- `pitwall update --version vX` installs release vX, older or newer, and hands the running daemon to it.
+- On Linux, programs open, split, prompt, send to and close tabs over `$PITWALL_SOCKET`, with the same guard as the CLI and `startId` retries that never open a second tab.
+- On Linux, `worktreeNew`, the queue commands, `hostCheck` and `adopt` on `$PITWALL_SOCKET` match the CLI for tabs on this machine.
+- A command that an older or newer daemon turns away always says so and names `pitwall update`; it sometimes printed `broken pipe`.
+- The pitwall skill shows how a script drives pitwall over `$PITWALL_SOCKET` without the CLI.
 
 ## v0.2.13-win.1
 

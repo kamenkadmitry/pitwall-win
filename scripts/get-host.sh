@@ -135,19 +135,24 @@ place() {
 }
 
 # window_pitwall prints the pitwall a window's remote-start runs on this
-# host: the first on the PATH, then the one in ~/.local/bin. None prints
-# nothing.
+# host: pitwall-core when the host has one, else pitwall, the first on the
+# PATH, then the one in ~/.local/bin. None prints nothing.
 window_pitwall() {
     (
         PATH="$PATH:$HOME/.local/bin"
-        command -v pitwall
+        bin=pitwall
+        if command -v pitwall-core >/dev/null 2>&1; then
+            bin=pitwall-core
+        fi
+        command -v "$bin"
     ) || true
 }
 
 # check_window fails when a window would not run a pitwall that starts,
-# though $1, the one just installed, does: another pitwall that does not
-# start is ahead of it on the PATH, or $1 is in a folder a window does not
-# look in. Installing changed nothing for the window then.
+# though $1, the one just installed, does: the one it picks instead, a
+# pitwall-core or a pitwall ahead on the PATH, does not start, or $1 is in a
+# folder a window does not look in. Installing changed nothing for the
+# window then.
 check_window() {
     runs=$(window_pitwall)
     if [ "$runs" = "$1" ]; then
@@ -158,10 +163,10 @@ check_window() {
         return 1
     fi
     if "$runs" --version >/dev/null 2>&1; then
-        printf 'A window runs %s, which is ahead of %s on the PATH of this host.\n' "$runs" "$1"
+        printf 'A window runs %s on this host, not %s: a pitwall-core, or a pitwall ahead on the PATH, comes first.\n' "$runs" "$1"
         return 0
     fi
-    printf 'pitwall: a window runs %s, which is ahead of %s on the PATH of this host and does not start. Remove or repair it, then check again.\n' "$runs" "$1" >&2
+    printf 'pitwall: a window runs %s on this host, not %s, and it does not start. Remove or repair it, then check again.\n' "$runs" "$1" >&2
     return 1
 }
 

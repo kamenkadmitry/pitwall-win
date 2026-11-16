@@ -31,18 +31,19 @@ const (
 // startup files print is not taken for its answer.
 const probeMark = "pitwall-probe"
 
-// probeCommand prints probeMark and four tab-separated fields: pitwall's
-// path on the host, empty when it has none; ok or fail, whether pitwall
-// --version ran; yes or no, whether that path is ~/.local/bin/pitwall, the
-// file Install writes; and what --version printed, on one line. It looks
-// where a window's remote-start does (cmd/pitwall's startCommand): the PATH
-// and then ~/.local/bin, where get-host.sh installs and which the PATH of
-// a non-interactive ssh login often lacks. It runs the binary because a
+// probeCommand prints probeMark and four tab-separated fields: the path of
+// the pitwall a window would run on the host, empty when it has none; ok
+// or fail, whether its --version ran; yes or no, whether that path is
+// ~/.local/bin/pitwall, the file Install writes; and what --version
+// printed, on one line. It picks as a window's remote-start does
+// (cmd/pitwall's startCommand): pitwall-core when the host has one, else
+// pitwall, on the PATH and then in ~/.local/bin, where get-host.sh installs
+// and which the PATH of a non-interactive ssh login often lacks. It runs the binary because a
 // file there proves little: a release built with the window does not start
 // on a host without the window's libraries. It always exits 0, so another
 // exit status is the host's or ssh's failure, never "no pitwall": sh's
 // command -v exits 1 in bash and 127 in dash.
-const probeCommand = `sh -c 'PATH="$PATH:$HOME/.local/bin"; p=$(command -v pitwall); r=; v=; o=no; ` +
+const probeCommand = `sh -c 'PATH="$PATH:$HOME/.local/bin"; b=pitwall; command -v pitwall-core >/dev/null && b=pitwall-core; p=$(command -v "$b"); r=; v=; o=no; ` +
 	`if [ "$p" = "$HOME/.local/bin/pitwall" ]; then o=yes; fi; ` +
 	`if [ -n "$p" ]; then v=$("$p" --version 2>&1) && r=ok || r=fail; fi; ` +
 	`printf "` + probeMark + `\t%s\t%s\t%s\t%s\n" "$p" "$r" "$o" "$(printf "%s" "$v" | tr "\n\t" "  ")"'`
@@ -143,9 +144,9 @@ func probeResult(out, stderr string, err error, timedOut bool, dest string) (int
 		msg := fmt.Sprintf("%s does not start: %s", path, strings.TrimPrefix(said, path+": "))
 		libs := strings.Contains(said, "error while loading shared libraries")
 		if !installs {
-			// why: a window runs the first pitwall on the PATH, so a new one
-			// in ~/.local/bin would stay behind this one and change nothing.
-			msg += ". It is ahead of ~/.local/bin on the host's PATH, so Install cannot replace it: "
+			// why: a window runs a pitwall-core, or the first pitwall on the PATH,
+			// so a new pitwall in ~/.local/bin would stay behind this one.
+			msg += ". A window runs this one, not ~/.local/bin/pitwall, which Install writes, so Install cannot replace it: "
 			if libs {
 				msg += "install the library named with the host's package manager, or remove this pitwall there, then check again"
 			} else {

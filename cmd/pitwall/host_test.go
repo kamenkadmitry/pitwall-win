@@ -14,15 +14,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/quanticstudios/pitwall/internal/config"
-	"github.com/quanticstudios/pitwall/internal/model"
 	"github.com/quanticstudios/pitwall/internal/proto"
-	"github.com/quanticstudios/pitwall/internal/ui/app"
 )
 
 // Every ssh call shares one connection, and the destination's port, user,
@@ -47,10 +43,10 @@ func TestRemoteSSHArgs(t *testing.T) {
 		restart    bool
 		start      string
 	}{
-		{"box", "me@box.example", false, `sh -c 'PATH="$PATH:$HOME/.local/bin" exec pitwall remote-start'`},
-		{"gpu", "gpu-alias", true, `sh -c 'PATH="$PATH:$HOME/.local/bin" exec pitwall remote-start --restart'`},
-		{"bare", "bare", false, `sh -c 'PATH="$PATH:$HOME/.local/bin" exec pitwall remote-start'`},
-		{"me@elsewhere", "me@elsewhere", false, `sh -c 'PATH="$PATH:$HOME/.local/bin" exec pitwall remote-start'`},
+		{"box", "me@box.example", false, `sh -c 'PATH="$PATH:$HOME/.local/bin"; b=pitwall; command -v pitwall-core >/dev/null && b=pitwall-core; exec "$b" remote-start'`},
+		{"gpu", "gpu-alias", true, `sh -c 'PATH="$PATH:$HOME/.local/bin"; b=pitwall; command -v pitwall-core >/dev/null && b=pitwall-core; exec "$b" remote-start --restart'`},
+		{"bare", "bare", false, `sh -c 'PATH="$PATH:$HOME/.local/bin"; b=pitwall; command -v pitwall-core >/dev/null && b=pitwall-core; exec "$b" remote-start'`},
+		{"me@elsewhere", "me@elsewhere", false, `sh -c 'PATH="$PATH:$HOME/.local/bin"; b=pitwall; command -v pitwall-core >/dev/null && b=pitwall-core; exec "$b" remote-start'`},
 	} {
 		r, err := newSSHHost(c.name, hosts)
 		if err != nil {
@@ -113,9 +109,9 @@ func TestRemoteErrors(t *testing.T) {
 		want    string
 	}{
 		{"v0.1.0-alpha.30", func() error { return r.sshError("sh: 1: exec: pitwall: not found\n", exit(127)) },
-			"pitwall is not installed on box: it is not on the PATH there or in ~/.local/bin. Install it with:\n  " + release},
+			"pitwall is not installed on box: neither pitwall-core nor pitwall is on the PATH there or in ~/.local/bin. Install pitwall with:\n  " + release},
 		{"dev-0123456789ab", func() error { return r.sshError("sh: 1: exec: pitwall: not found\n", exit(127)) },
-			"pitwall is not installed on box: it is not on the PATH there or in ~/.local/bin. Install it with:\n  " + latest},
+			"pitwall is not installed on box: neither pitwall-core nor pitwall is on the PATH there or in ~/.local/bin. Install pitwall with:\n  " + latest},
 		{"v0.1.0-alpha.30", func() error { return r.sshError("usage:\n  pitwall --version          print the version\n", exit(2)) },
 			"pitwall on box is too old to serve a window over ssh. Update it with:\n  " + release},
 		{"v0.1.0-alpha.30", func() error {
@@ -129,10 +125,10 @@ func TestRemoteErrors(t *testing.T) {
 		// Upstream has no release named after this repo's -win.N tags, nor
 		// after a git describe string: the hint pins what get.sh can fetch.
 		{"v0.2.13-win.1", func() error { return r.sshError("sh: 1: exec: pitwall: not found\n", exit(127)) },
-			"pitwall is not installed on box: it is not on the PATH there or in ~/.local/bin. Install it with:\n  " +
+			"pitwall is not installed on box: neither pitwall-core nor pitwall is on the PATH there or in ~/.local/bin. Install pitwall with:\n  " +
 				"ssh me@box 'curl -fsSL https://raw.githubusercontent.com/kamenkadmitry/pitwall-win/main/scripts/get-host.sh | PITWALL_VERSION=v0.2.13 sh'"},
 		{"v0.2.13-win.1-3-g0123abc", func() error { return r.sshError("sh: 1: exec: pitwall: not found\n", exit(127)) },
-			"pitwall is not installed on box: it is not on the PATH there or in ~/.local/bin. Install it with:\n  " + latest},
+			"pitwall is not installed on box: neither pitwall-core nor pitwall is on the PATH there or in ~/.local/bin. Install pitwall with:\n  " + latest},
 	} {
 		version = c.version
 		if got := fmt.Sprint(c.err()); got != c.want {
@@ -141,6 +137,53 @@ func TestRemoteErrors(t *testing.T) {
 	}
 	if sock, err := r.parseStart(fmt.Sprintf("motd\n%s\t%d\t9\tv0.1.0-alpha.99\t/run/user/1000/pitwall/pitwall.sock\r\n", remoteMark, proto.Version)); err != nil || sock != "/run/user/1000/pitwall/pitwall.sock" {
 		t.Errorf("same version, any level: %q, %v", sock, err)
+	}
+}
+
+// TestRemoteStartFindsCore: remote-start runs through pitwall-core when
+// the host has it, even next to a pitwall, else through pitwall, and a host
+// with neither gets the command that installs pitwall-core.
+func TestRemoteStartFindsCore(t *testing.T) {
+	dir := t.TempDir()
+	ssh := filepath.Join(dir, "ssh")
+	if err := os.WriteFile(ssh, []byte(fmt.Sprintf("#!/bin/sh\nPITWALL_TEST_SSH='%s' exec '%s' \"$@\"\n", dir, os.Args[0])), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", t.TempDir()) // the command adds ~/.local/bin, empty here
+	t.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0")
+	prev := version
+	t.Cleanup(func() { version = prev })
+	version = "dev"
+	for _, c := range []struct {
+		name    string
+		have    []string
+		restart bool
+		want    string
+	}{
+		{"both", []string{"pitwall", "pitwall-core"}, false, "pitwall-core remote-start"},
+		{"both restart", []string{"pitwall", "pitwall-core"}, true, "pitwall-core remote-start --restart"},
+		{"core", []string{"pitwall-core"}, false, "pitwall-core remote-start"},
+		{"desktop", []string{"pitwall"}, false, "pitwall remote-start"},
+		{"none", nil, false, "neither pitwall-core nor pitwall is on the PATH there or in ~/.local/bin. Install pitwall with:\n  ssh me@box 'curl -fsSL " + getScript + " | sh'"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			bin := t.TempDir()
+			if err := os.Symlink("/bin/sh", filepath.Join(bin, "sh")); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range c.have {
+				script := fmt.Sprintf("#!/bin/sh\nprintf '%s\\t%d\\t0\\tv1\\t%s %%s\\n' \"$*\"\n", remoteMark, proto.Version, name)
+				if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("PATH", bin)
+			r := &sshHost{name: "box", ssh: ssh, dest: "me@box", dir: dir}
+			sock, err := r.start(c.restart)
+			if got := fmt.Sprint(sock, err); !strings.Contains(got, c.want) {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 
@@ -269,117 +312,6 @@ func killRelay(dir string) {
 		syscall.Kill(pid, syscall.SIGKILL)
 	}
 	os.Remove(filepath.Join(dir, "relay.pid"))
-}
-
-// TestRemoteReconnects runs pitwall --host's dial through a fake ssh whose
-// "host" is this machine: remote-start runs there and reports a daemon
-// socket, which the shared connection forwards. When the link drops, the
-// window reconnects through a new forward to the same daemon.
-func TestRemoteReconnects(t *testing.T) {
-	dir := fakeHost(t)
-	t.Setenv("HOME", dir)
-	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(dir, "run"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	t.Setenv("PITWALL_PANE", "")
-	// remote-start, run on the "host", reports this socket; the window
-	// reaches it only through the forward.
-	sock := filepath.Join(dir, "host.sock")
-	t.Setenv("PITWALL_SOCKET", sock)
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	t.Cleanup(func() { killRelay(dir) })
-
-	accept := func() *proto.Conn {
-		t.Helper()
-		for {
-			ln.(*net.UnixListener).SetDeadline(time.Now().Add(10 * time.Second))
-			nc, err := ln.Accept()
-			if err != nil {
-				t.Fatalf("no dial: %v", err)
-			}
-			nc.SetDeadline(time.Now().Add(10 * time.Second))
-			c := proto.NewConn(nc)
-			m, err := c.Recv()
-			if err != nil {
-				nc.Close() // remote-start checking for a daemon
-				continue
-			}
-			if h, ok := m.(proto.Hello); !ok || h.Kind != "gui" || h.Session != "work" {
-				t.Fatalf("hello: %#v", m)
-			}
-			t.Cleanup(func() { nc.Close() })
-			return c
-		}
-	}
-	r, err := newSSHHost("box", []config.Host{{Name: "box", SSH: "me@box"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	type dialed struct {
-		c   *proto.Conn
-		st  proto.StateMsg
-		err error
-	}
-	first := make(chan dialed, 1)
-	go func() { c, st, err := r.dial("work", false); first <- dialed{c, st, err} }()
-	d := accept()
-	st := model.State{Version: 1, Sessions: []model.Session{{ID: "s1", Name: "work"}}}
-	d.Send(proto.StateMsg{State: st})
-	got := <-first
-	if got.err != nil {
-		t.Fatal(got.err)
-	}
-	b := newBackend(got.c, "s1")
-	// Once the test is over, the backend's next try ends its dial loop.
-	var over atomic.Bool
-	defer over.Store(true)
-	b.state, b.name = got.st.State, "work"
-	b.redial = func(session string, restart bool) (*proto.Conn, proto.StateMsg, error) {
-		if over.Load() {
-			return nil, proto.StateMsg{}, incompatible{proto.Version - 1}
-		}
-		return r.dial(session, restart)
-	}
-	go b.recvLoop()
-	go b.sendLoop()
-
-	killRelay(dir) // the link drops, and the forward with it
-	d = accept()
-	st.Version = 2
-	d.Send(proto.StateMsg{State: st})
-	for deadline := time.Now().Add(10 * time.Second); b.Link() != (app.Link{Epoch: 2}) || b.State().Version != 2; time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("no reconnect: link %+v, state version %d", b.Link(), b.State().Version)
-		}
-	}
-	b.Send(proto.Input{Pane: "p", Data: []byte("x")})
-	if m, err := d.Recv(); err != nil {
-		t.Fatal(err)
-	} else if in, ok := m.(proto.Input); !ok || in.Pane != "p" {
-		t.Fatalf("%#v through the new forward", m)
-	}
-
-	data, _ := os.ReadFile(filepath.Join(dir, "ssh.log"))
-	log := string(data)
-	// A slow try can time out and go again; each one starts and forwards.
-	starts := strings.Count(log, "-- me@box sh -c 'PATH=\"$PATH:$HOME/.local/bin\" exec pitwall remote-start'")
-	forwards := strings.Count(log, "-O forward -L "+r.local+":"+sock+" -- me@box")
-	if starts < 2 || forwards != starts {
-		t.Errorf("%d starts and %d forwards, want 2 or more of each:\n%s", starts, forwards, log)
-	}
-
-	over.Store(true)
-	r.close()
-	data, _ = os.ReadFile(filepath.Join(dir, "ssh.log"))
-	if !strings.HasSuffix(string(data), "-O cancel -L "+r.local+":"+sock+" -- me@box\n") {
-		t.Errorf("no cancel on close:\n%s", data)
-	}
-	if _, err := os.Stat(r.local); !os.IsNotExist(err) {
-		t.Errorf("forwarded socket left behind: %v", err)
-	}
 }
 
 // refuses tells a daemon that turns this proto.Version away, which

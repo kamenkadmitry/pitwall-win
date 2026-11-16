@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/quanticstudios/pitwall/internal/config"
+	"github.com/quanticstudios/pitwall/internal/control"
 	"github.com/quanticstudios/pitwall/internal/gitstat"
 	"github.com/quanticstudios/pitwall/internal/model"
 	"github.com/quanticstudios/pitwall/internal/proto"
@@ -113,7 +114,8 @@ func worktreeCommand(ctx context.Context, args []string, in *os.File, out, errOu
 	}
 	if lane != "" {
 		var laneHost string
-		if preset, cmd, laneHost, err = laneLaunch(lane, preset, cmd); err != nil {
+		s, _ := config.Load()
+		if preset, cmd, laneHost, err = control.Lane(s, lane, preset, cmd); err != nil {
 			return err
 		}
 		host = cmp.Or(host, laneHost)
@@ -128,9 +130,9 @@ func worktreeCommand(ctx context.Context, args []string, in *os.File, out, errOu
 		return errors.New("--branch cannot be used with --host: the branch may differ on the two machines. Use --from <branch> for a new branch off it")
 	}
 	// An agent's worker gets the guard when [agents] guard_workers says so.
-	if !guarded && os.Getenv("PITWALL_PANE") != "" && (len(cmd) > 0 || preset != "") {
+	if !guarded {
 		s, _ := config.Load()
-		guarded = s.GuardWorkers
+		guarded = control.WorkerGuard(s, envCaller(""), cmd, preset)
 	}
 	var vars []string
 	if cmd, vars, err = launch(preset, guarded, cmd, host == ""); err != nil {
@@ -138,7 +140,7 @@ func worktreeCommand(ctx context.Context, args []string, in *os.File, out, errOu
 	}
 	var root string
 	if !all {
-		if root, err = mainRoot(ctx, "."); err != nil {
+		if root, err = control.MainRoot(ctx, "."); err != nil {
 			return err
 		}
 	}
@@ -173,7 +175,7 @@ func worktreeCommand(ctx context.Context, args []string, in *os.File, out, errOu
 		}
 		return listWorktrees(ctx, out, state, roots)
 	case "new":
-		f, err := worktreeFrom(ctx, root, from, branch, pr)
+		f, err := control.WorktreeFrom(ctx, root, from, branch, pr)
 		if err != nil {
 			return err
 		}
@@ -221,30 +223,6 @@ func worktreeCommand(ctx context.Context, args []string, in *os.File, out, errOu
 	return err
 }
 
-// laneLaunch turns --lane into the lane's preset, its brief (the words of
-// brief joined, with the worker contract before them) and its host.
-func laneLaunch(lane, preset string, brief []string) (string, []string, string, error) {
-	if preset != "" {
-		return "", nil, "", errors.New("use one of --preset and --lane")
-	}
-	s, _ := config.Load()
-	if !s.Fleet.On {
-		return "", nil, "", errors.New("--lane needs fleet mode: turn it on in Settings, Fleet, or set enabled = true under [fleet] in config.toml")
-	}
-	l, ok := s.Fleet.Lane(lane)
-	if !ok {
-		return "", nil, "", fmt.Errorf("no lane %q with a preset; see pitwall worktree lanes", lane)
-	}
-	if len(brief) == 0 {
-		return "", nil, "", errors.New(`--lane needs a brief: pitwall worktree new <name> --lane small -- "<brief>"`)
-	}
-	text, err := s.Fleet.Brief(strings.Join(brief, " "))
-	if err != nil {
-		return "", nil, "", err
-	}
-	return l.Preset, []string{text}, l.Host, nil
-}
-
 // listLanes prints the fleet lanes as config.toml sets them.
 func listLanes(out io.Writer) error {
 	s, _ := config.Load()
@@ -265,47 +243,6 @@ func listLanes(out io.Writer) error {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", l.Name, preset, tb, config.LaneDescs[i])
 	}
 	return w.Flush()
-}
-
-// mainRoot is the main worktree of the repo at dir, also from inside a
-// linked worktree.
-func mainRoot(ctx context.Context, dir string) (string, error) {
-	trees, err := gitstat.ListWorktrees(ctx, dir)
-	if err != nil || len(trees) == 0 {
-		return "", errors.New("not in a git repository")
-	}
-	return trees[0].Path, nil
-}
-
-// worktreeFrom turns new's flags into what the worktree starts from. A
-// --branch with no local branch of that name may name a remote one.
-func worktreeFrom(ctx context.Context, root, from, branch string, pr int) (model.WorktreeFrom, error) {
-	set := 0
-	for _, on := range []bool{from != "", branch != "", pr != 0} {
-		if on {
-			set++
-		}
-	}
-	if set > 1 {
-		return model.WorktreeFrom{}, errors.New("use one of --from, --branch and --pr")
-	}
-	switch {
-	case pr != 0:
-		return model.WorktreeFrom{Kind: model.FromPR, PR: pr}, nil
-	case branch != "":
-		refs, err := gitstat.ListRefs(ctx, root)
-		if err != nil {
-			return model.WorktreeFrom{}, err
-		}
-		if slices.Contains(refs.Local, branch) {
-			return model.WorktreeFrom{Kind: model.FromBranch, Ref: branch}, nil
-		}
-		if slices.Contains(refs.Remote, branch) {
-			return model.WorktreeFrom{Kind: model.FromRemote, Ref: branch}, nil
-		}
-		return model.WorktreeFrom{}, fmt.Errorf("no local or remote branch %q", branch)
-	}
-	return model.WorktreeFrom{Ref: from}, nil
 }
 
 // tabAt is the tab started in path, if any.

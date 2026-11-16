@@ -42,7 +42,7 @@ the host answers and has a pitwall that starts, and Install puts one
 there. By hand it is:
 
 ```sh
-ssh box 'curl -fsSL https://raw.githubusercontent.com/kamenkadmitry/pitwall-win/main/scripts/get-host.sh | PITWALL_VERSION=v0.2.13 sh'
+ssh box 'curl -fsSL https://raw.githubusercontent.com/kamenkadmitry/pitwall-win/main/scripts/get-host.sh | PITWALL_VERSION=v0.2.14 sh'
 ssh box '~/.local/bin/pitwall hooks install'
 ```
 
@@ -52,18 +52,28 @@ window's libraries (EGL, Wayland, X11, xkbcommon) and does not start
 without every one, even as a daemon, so the script installs those the host
 lacks with `apt-get`, as root or through a sudo that asks no password.
 Without `apt-get` or that sudo it stops and names what to install. A macOS
-host uses upstream's `get.sh`.
+host uses upstream's `get.sh`. A host can run upstream's pitwall-core, the
+build without the window, instead: upstream's `get.sh --core` installs it,
+and it needs none of those libraries.
 
 The hooks belong on the host, where the agents run: they report to the
-daemon there. pitwall looks for itself on the host's `PATH` and in
-`~/.local/bin`, which a non-interactive ssh login often leaves off the
-`PATH`. When pitwall is missing there, too old for `remote-start`, or of
-another protocol major version, the window does not open and the error
-gives the install command, pinned to the upstream release this pitwall was
-made from. pitwall never installs anything on a host by itself: only
-Install on Settings, Hosts does, when you click it. When the daemon
-running on the host is of another major version than the pitwall installed
-there, the window asks before restarting it, as after an upgrade.
+daemon there. Hooks written through the `pitwall` link, or by the other of
+pitwall and pitwall-core in the same folder, count as installed, so
+`hooks install` adds no second copy and `doctor` reports them ok. pitwall
+runs `pitwall-core` on the host when it finds one, else `pitwall`, so an
+old `pitwall` left there does not shadow a new pitwall-core. It looks on
+the host's `PATH` and in `~/.local/bin`, which a non-interactive ssh login
+often leaves off the `PATH`. When neither is there, the one there is too
+old for `remote-start`, or it speaks another protocol major version, the
+window does not open and the error gives the install command, pinned to
+the upstream release this pitwall was made from. pitwall never installs
+anything on a host by itself: only Install on Settings, Hosts does, when
+you click it. `pitwall doctor` on the host prints the `ln -s` that makes
+`pitwall` run pitwall-core when that name is free, and warns when pitwall
+and pitwall-core in one folder report different versions; each one's
+`update` updates only itself and names the other. When the daemon running
+on the host is of another major version than the pitwall installed there,
+the window asks before restarting it, as after an upgrade.
 
 On a Linux host with systemd, run `loginctl enable-linger` there once.
 Without it, logging out of the host's last session, which closing the
@@ -372,9 +382,23 @@ Crash traces go to `journalctl --user -u pitwall`; the daemon's own log
 stays in `daemon.log`.
 
 `systemctl --user stop pitwall` stops the daemon and every program in its
-panes. When the window restarts the daemon after an upgrade, the new one runs
-outside the unit until the next boot, and `systemctl --user status` shows the
-unit inactive until then. To remove the unit:
+panes. Daemons started from this release refuse the update handoff: once
+the daemon exited, systemd would stop the unit and kill every process left
+in it, which is every pane. `pitwall update` then installs, keeps the old
+daemon serving and exits 1 with the reason. To move onto the new binary, run
+`systemctl --user restart pitwall` when you can stop the programs in panes;
+agents resume. `pitwall update --restart` and the window's Restart run the
+new daemon outside the unit until the next boot instead, and
+`systemctl --user status` shows the unit inactive until then.
+
+Daemons from v0.2.13 or earlier have no systemd refusal guard. They can
+accept a handoff even from the new updater, and systemd then kills their
+panes. For the first upgrade of such a service, install the binary with
+the [install script](install.md#updates), leave `pitwall update` and the
+window's Update button alone, and restart the unit when you can stop the
+programs in panes.
+
+To remove the unit:
 
 ```sh
 systemctl --user disable --now pitwall

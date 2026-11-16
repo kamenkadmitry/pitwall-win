@@ -107,6 +107,75 @@
         },
         {
           "$ref": "#/$defs/updateQueue"
+        },
+        {
+          "$ref": "#/$defs/listTabs"
+        },
+        {
+          "$ref": "#/$defs/subscribeTabs"
+        },
+        {
+          "$ref": "#/$defs/unsubscribeTabs"
+        },
+        {
+          "$ref": "#/$defs/readPane"
+        },
+        {
+          "$ref": "#/$defs/scrollback"
+        },
+        {
+          "$ref": "#/$defs/waitPane"
+        },
+        {
+          "$ref": "#/$defs/newTab"
+        },
+        {
+          "$ref": "#/$defs/splitPane"
+        },
+        {
+          "$ref": "#/$defs/sendPane"
+        },
+        {
+          "$ref": "#/$defs/promptPane"
+        },
+        {
+          "$ref": "#/$defs/killTab"
+        },
+        {
+          "$ref": "#/$defs/renameTab"
+        },
+        {
+          "$ref": "#/$defs/detachTab"
+        },
+        {
+          "$ref": "#/$defs/focusTab"
+        },
+        {
+          "$ref": "#/$defs/tabNew"
+        },
+        {
+          "$ref": "#/$defs/tabClose"
+        },
+        {
+          "$ref": "#/$defs/setStatus"
+        },
+        {
+          "$ref": "#/$defs/worktreeNew"
+        },
+        {
+          "$ref": "#/$defs/queueAdd"
+        },
+        {
+          "$ref": "#/$defs/queueList"
+        },
+        {
+          "$ref": "#/$defs/queueDrop"
+        },
+        {
+          "$ref": "#/$defs/hostCheck"
+        },
+        {
+          "$ref": "#/$defs/adopt"
         }
       ]
     },
@@ -133,6 +202,12 @@
         },
         {
           "$ref": "#/$defs/removed"
+        },
+        {
+          "$ref": "#/$defs/close"
+        },
+        {
+          "$ref": "#/$defs/tabs"
         }
       ]
     },
@@ -142,7 +217,6 @@
       "required": [
         "type",
         "protocol",
-        "token",
         "client"
       ],
       "properties": {
@@ -154,7 +228,8 @@
           "minimum": 1
         },
         "token": {
-          "type": "string"
+          "type": "string",
+          "description": "Required on WebSocket; optional and ignored on the local socket."
         },
         "client": {
           "type": "object",
@@ -1101,7 +1176,12 @@
             "provider",
             "invalid",
             "forge",
-            "jev"
+            "jev",
+            "tooLarge",
+            "ambiguous",
+            "remote",
+            "timeout",
+            "refused"
           ]
         },
         "message": {
@@ -1173,7 +1253,7 @@
             },
             "text": {
               "type": "string",
-              "description": "prPrompt: the message, \"\" with nothing to send."
+              "description": "prPrompt: the message, \"\" with nothing to send; readPane and scrollback: the pane's text."
             },
             "checkpoints": {
               "type": "array",
@@ -1199,6 +1279,164 @@
               "items": {
                 "$ref": "#/$defs/fileChange"
               }
+            },
+            "session": {
+              "$ref": "#/$defs/tabSession",
+              "description": "listTabs and queueList: the session."
+            },
+            "tabs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/tab"
+              }
+            },
+            "outcome": {
+              "enum": [
+                "reached",
+                "blocked",
+                "exited",
+                "closed"
+              ],
+              "description": "waitPane and promptPane: why the wait ended."
+            },
+            "state": {
+              "type": "string",
+              "description": "waitPane: the state the pane reached."
+            },
+            "question": {
+              "type": "string",
+              "description": "waitPane: what the blocked agent asks."
+            },
+            "exit": {
+              "type": "object",
+              "required": [
+                "code",
+                "unknown",
+                "signal"
+              ],
+              "properties": {
+                "code": {
+                  "type": "integer"
+                },
+                "unknown": {
+                  "type": "boolean"
+                },
+                "signal": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "description": "waitPane: how the pane's process ended. code is the program's own; negative when a signal killed it."
+            },
+            "tab": {
+              "type": "string",
+              "description": "newTab, tabNew and worktreeNew: the new tab's id."
+            },
+            "pane": {
+              "type": "string",
+              "description": "newTab and worktreeNew: the new tab's pane id; splitPane: the new pane's id."
+            },
+            "closed": {
+              "type": "boolean",
+              "description": "newTab: true when a retry of its startId found the tab closed."
+            },
+            "reply": {
+              "type": "string",
+              "description": "promptPane with wait: the reply of the turn the prompt started."
+            },
+            "problems": {
+              "type": "array",
+              "description": "hostCheck: what would stop the worker, or with warn what it would start without; empty when nothing would.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "what",
+                  "fix",
+                  "warn"
+                ],
+                "properties": {
+                  "what": {
+                    "type": "string"
+                  },
+                  "fix": {
+                    "type": "string",
+                    "description": "A command to run on this machine, or what to change; may be empty."
+                  },
+                  "warn": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "tasks": {
+              "type": "array",
+              "description": "queueList: the queued tasks, first to start first. Never a command line or an environment.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "n",
+                  "id",
+                  "title",
+                  "dir",
+                  "group",
+                  "worktree",
+                  "freshWorktree",
+                  "branch",
+                  "nextStart",
+                  "repeatMs"
+                ],
+                "properties": {
+                  "n": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Its number, as pitwall queue ls shows it."
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "The first line of its prompt, or the program's name."
+                  },
+                  "dir": {
+                    "type": "string"
+                  },
+                  "group": {
+                    "type": "string",
+                    "description": "The group its tab joins, \"\" for none."
+                  },
+                  "worktree": {
+                    "type": "string"
+                  },
+                  "freshWorktree": {
+                    "type": "boolean"
+                  },
+                  "branch": {
+                    "type": "string"
+                  },
+                  "nextStart": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "RFC 3339, null to start when the queue has room."
+                  },
+                  "repeatMs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "0 runs once."
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "adopted": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "adopt: the ids of the tabs it adopted."
             }
           },
           "additionalProperties": false
@@ -1249,6 +1487,28 @@
           ]
         },
         "message": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "close": {
+      "description": "The local socket's last line, where WebSocket sends a close frame.",
+      "type": "object",
+      "required": [
+        "type",
+        "code",
+        "reason"
+      ],
+      "properties": {
+        "type": {
+          "const": "close"
+        },
+        "code": {
+          "type": "integer",
+          "minimum": 1000
+        },
+        "reason": {
           "type": "string"
         }
       },
@@ -3214,6 +3474,1009 @@
           ]
         }
       }
+    },
+    "listTabs": {
+      "description": "What pitwall ls --json lists: a session's tabs, and a stale row for each worker on another host.",
+      "type": "object",
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "const": "listTabs"
+        },
+        "id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        },
+        "children": {
+          "type": "string",
+          "description": "A pane id: only the tabs its tab opened, as ls --children."
+        },
+        "orphans": {
+          "type": "boolean",
+          "description": "Only workers whose parent tab is gone, as ls --orphans."
+        }
+      },
+      "additionalProperties": false
+    },
+    "subscribeTabs": {
+      "description": "Push the session's tabs as a tabs frame now and each time they change.",
+      "type": "object",
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "const": "subscribeTabs"
+        },
+        "id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        }
+      },
+      "additionalProperties": false
+    },
+    "unsubscribeTabs": {
+      "description": "Stop the tabs pushes.",
+      "type": "object",
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "const": "unsubscribeTabs"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "readPane": {
+      "description": "What pitwall read gives: the agent's last reply, or the screen.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "pane"
+      ],
+      "properties": {
+        "type": {
+          "const": "readPane"
+        },
+        "id": {
+          "type": "string"
+        },
+        "pane": {
+          "type": "string",
+          "description": "An address as pitwall read takes it: #N, N, TAB.N, a title, a unique title prefix, or @ and a pane id."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        },
+        "screen": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "scrollback": {
+      "description": "What pitwall scrollback gives: the pane's history and screen.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "pane"
+      ],
+      "properties": {
+        "type": {
+          "const": "scrollback"
+        },
+        "id": {
+          "type": "string"
+        },
+        "pane": {
+          "type": "string",
+          "description": "An address as pitwall read takes it: #N, N, TAB.N, a title, a unique title prefix, or @ and a pane id."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        },
+        "lines": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The last lines only, at most 10000; 0 or left out for all."
+        }
+      },
+      "additionalProperties": false
+    },
+    "waitPane": {
+      "description": "What pitwall wait does for one pane.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "pane",
+        "until"
+      ],
+      "properties": {
+        "type": {
+          "const": "waitPane"
+        },
+        "id": {
+          "type": "string"
+        },
+        "pane": {
+          "type": "string",
+          "description": "An address as pitwall read takes it: #N, N, TAB.N, a title, a unique title prefix, or @ and a pane id."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        },
+        "until": {
+          "enum": [
+            "done",
+            "idle",
+            "blocked",
+            "exit"
+          ]
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854,
+          "description": "0 or left out waits as long as it takes."
+        }
+      },
+      "additionalProperties": false
+    },
+    "newTab": {
+      "description": "What pitwall new does: open a tab running cmd or a preset's agent, or a shell, in dir.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "dir"
+      ],
+      "properties": {
+        "type": {
+          "const": "newTab"
+        },
+        "id": {
+          "type": "string"
+        },
+        "dir": {
+          "type": "string",
+          "description": "An absolute path: the folder the tab opens in."
+        },
+        "cmd": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The program and its arguments, found on the daemon's PATH; left out for a shell."
+        },
+        "name": {
+          "type": "string",
+          "description": "The tab's name; left out for an automatic title."
+        },
+        "detached": {
+          "type": "boolean",
+          "description": "Open it hidden from the sidebar, as new -d."
+        },
+        "preset": {
+          "type": "string",
+          "description": "An [[agents.preset]] name: its agent, arguments, variables and guard, before cmd."
+        },
+        "model": {
+          "type": "string",
+          "description": "A model for the agent, as new --model."
+        },
+        "guard": {
+          "type": "boolean",
+          "description": "Run the agent under the guard, as new --guard. Refused when the agent's hooks cannot deny."
+        },
+        "parentPane": {
+          "type": "string",
+          "description": "The pane id of the agent that asks for the tab: its tab becomes the parent, and [agents] guard_workers applies."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        },
+        "startId": {
+          "type": "string",
+          "description": "16 hex digits the client picks, so a retry of this request never opens a second tab. The tab gets it as its id."
+        }
+      },
+      "additionalProperties": false
+    },
+    "splitPane": {
+      "description": "What pitwall split does: open a pane beside the tab's last pane.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "tab"
+      ],
+      "properties": {
+        "type": {
+          "const": "splitPane"
+        },
+        "id": {
+          "type": "string"
+        },
+        "tab": {
+          "type": "string",
+          "description": "A tab's address as pitwall kill takes it: #N, N, a title, a unique title prefix, or @ and a tab or pane id."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        },
+        "down": {
+          "type": "boolean",
+          "description": "Open it below instead of beside."
+        },
+        "cmd": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The program and its arguments, found on the daemon's PATH; left out for a shell."
+        }
+      },
+      "additionalProperties": false
+    },
+    "sendPane": {
+      "description": "What pitwall send does: queue a message the daemon types once the pane's agent sits at its prompt.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "pane",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "sendPane"
+        },
+        "id": {
+          "type": "string"
+        },
+        "pane": {
+          "type": "string",
+          "description": "An address as pitwall read takes it: #N, N, TAB.N, a title, a unique title prefix, or @ and a pane id."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        },
+        "text": {
+          "type": "string"
+        },
+        "fromPane": {
+          "type": "string",
+          "description": "The sending agent's pane id: the message's header names it, and it may send a pane at most 20 messages before the user types there."
+        }
+      },
+      "additionalProperties": false
+    },
+    "promptPane": {
+      "description": "What pitwall prompt does: type a prompt once the agent's turn has ended.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "pane",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "promptPane"
+        },
+        "id": {
+          "type": "string"
+        },
+        "pane": {
+          "type": "string",
+          "description": "An address as pitwall read takes it: #N, N, TAB.N, a title, a unique title prefix, or @ and a pane id."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        },
+        "text": {
+          "type": "string"
+        },
+        "wait": {
+          "type": "boolean",
+          "description": "Answer once the turn this prompt starts ends, with its reply."
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854,
+          "description": "0 or left out waits as long as it takes."
+        }
+      },
+      "additionalProperties": false
+    },
+    "killTab": {
+      "description": "What pitwall kill does: close a tab and its panes.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "tab"
+      ],
+      "properties": {
+        "type": {
+          "const": "killTab"
+        },
+        "id": {
+          "type": "string"
+        },
+        "tab": {
+          "type": "string",
+          "description": "A tab's address as pitwall kill takes it: #N, N, a title, a unique title prefix, or @ and a tab or pane id."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        }
+      },
+      "additionalProperties": false
+    },
+    "renameTab": {
+      "description": "What pitwall rename does.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "tab",
+        "title"
+      ],
+      "properties": {
+        "type": {
+          "const": "renameTab"
+        },
+        "id": {
+          "type": "string"
+        },
+        "tab": {
+          "type": "string",
+          "description": "A tab's address as pitwall kill takes it: #N, N, a title, a unique title prefix, or @ and a tab or pane id."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "detachTab": {
+      "description": "What pitwall detach does: hide a tab from the sidebar; its programs keep running.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "tab"
+      ],
+      "properties": {
+        "type": {
+          "const": "detachTab"
+        },
+        "id": {
+          "type": "string"
+        },
+        "tab": {
+          "type": "string",
+          "description": "A tab's address as pitwall kill takes it: #N, N, a title, a unique title prefix, or @ and a tab or pane id."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        }
+      },
+      "additionalProperties": false
+    },
+    "focusTab": {
+      "description": "Bring a tab back to the sidebar and show it in the windows on its session.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "tab"
+      ],
+      "properties": {
+        "type": {
+          "const": "focusTab"
+        },
+        "id": {
+          "type": "string"
+        },
+        "tab": {
+          "type": "string",
+          "description": "A tab's address as pitwall kill takes it: #N, N, a title, a unique title prefix, or @ and a tab or pane id."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        }
+      },
+      "additionalProperties": false
+    },
+    "tabNew": {
+      "description": "What pitwall tab new does in that pane: open a shell tab after the pane's tab.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "pane"
+      ],
+      "properties": {
+        "type": {
+          "const": "tabNew"
+        },
+        "id": {
+          "type": "string"
+        },
+        "pane": {
+          "type": "string",
+          "description": "An address as pitwall read takes it: #N, N, TAB.N, a title, a unique title prefix, or @ and a pane id."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        }
+      },
+      "additionalProperties": false
+    },
+    "tabClose": {
+      "description": "What pitwall tab close does in that pane: close the pane's tab.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "pane"
+      ],
+      "properties": {
+        "type": {
+          "const": "tabClose"
+        },
+        "id": {
+          "type": "string"
+        },
+        "pane": {
+          "type": "string",
+          "description": "An address as pitwall read takes it: #N, N, TAB.N, a title, a unique title prefix, or @ and a pane id."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        }
+      },
+      "additionalProperties": false
+    },
+    "setStatus": {
+      "description": "What pitwall status does: the line under the pane's tab, or with state the program status of the pane.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "pane"
+      ],
+      "properties": {
+        "type": {
+          "const": "setStatus"
+        },
+        "id": {
+          "type": "string"
+        },
+        "pane": {
+          "type": "string",
+          "description": "An address as pitwall read takes it: #N, N, TAB.N, a title, a unique title prefix, or @ and a pane id."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        },
+        "text": {
+          "type": "string",
+          "description": "The line; left out or empty clears it."
+        },
+        "state": {
+          "enum": [
+            "working",
+            "blocked",
+            "done",
+            "error",
+            "idle"
+          ],
+          "description": "Report the pane's program state instead, as pitwall status <state>."
+        },
+        "app": {
+          "type": "string",
+          "description": "With state: the program's name, 1 to 32 bytes of letters, digits and _ . + -."
+        },
+        "progress": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "With state working or blocked: percent done."
+        },
+        "message": {
+          "type": "string",
+          "description": "With state: a short line of UTF-8 without control characters."
+        }
+      },
+      "additionalProperties": false
+    },
+    "tabs": {
+      "description": "The pushed tab list of a subscribeTabs.",
+      "type": "object",
+      "required": [
+        "type",
+        "session",
+        "tabs"
+      ],
+      "properties": {
+        "type": {
+          "const": "tabs"
+        },
+        "session": {
+          "$ref": "#/$defs/tabSession"
+        },
+        "tabs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tab"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "tabSession": {
+      "description": "The session a tab list is of, null when none is open.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "tabPane": {
+      "description": "One pane of a tab, as in pitwall ls --json.",
+      "type": "object",
+      "required": [
+        "n",
+        "id",
+        "agent",
+        "state",
+        "question",
+        "exit_code",
+        "queued",
+        "since"
+      ],
+      "properties": {
+        "n": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "id": {
+          "type": "string"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "queued": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "since": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "tab": {
+      "description": "One tab, as in pitwall ls --json; fields may be added, never renamed or dropped.",
+      "type": "object",
+      "required": [
+        "n",
+        "id",
+        "title",
+        "group",
+        "cwd",
+        "branch",
+        "agent",
+        "state",
+        "question",
+        "exit_code",
+        "panes",
+        "detached",
+        "pane_list",
+        "parent",
+        "since",
+        "pr_state",
+        "quiet_since",
+        "status",
+        "host",
+        "addr",
+        "stale"
+      ],
+      "properties": {
+        "n": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "group": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "description": "working, blocked, done, pr-open, idle, parked, running, exited, unknown for a stale row, or \"\" for an agent not seen running yet."
+        },
+        "question": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "panes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "detached": {
+          "type": "boolean"
+        },
+        "pane_list": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tabPane"
+          }
+        },
+        "parent": {
+          "type": "string"
+        },
+        "since": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pr_state": {
+          "type": "string"
+        },
+        "quiet_since": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "addr": {
+          "type": "string"
+        },
+        "stale": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "worktreeNew": {
+      "description": "What pitwall worktree new does in the repo: open a tab in a new worktree, <repo>/.worktrees/<name>, on this machine.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "repo",
+        "name"
+      ],
+      "properties": {
+        "type": {
+          "const": "worktreeNew"
+        },
+        "id": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string",
+          "description": "An absolute path in the git repository the worktree comes from."
+        },
+        "name": {
+          "type": "string",
+          "description": "The worktree's folder, its new branch and the tab's name."
+        },
+        "session": {
+          "type": "string",
+          "description": "Without parentPane, the session whose group of the repo gets the tab: its id, exact name or a unique prefix of its name; left out for the most recently used one."
+        },
+        "parentPane": {
+          "type": "string",
+          "description": "The pane id of the agent that asks for the worktree: its tab becomes the parent, the tab joins its group, and [agents] guard_workers applies."
+        },
+        "from": {
+          "type": "string",
+          "description": "The ref a new branch starts from, as --from; left out for the default branch."
+        },
+        "branch": {
+          "type": "string",
+          "description": "An existing local or remote branch to check out, as --branch."
+        },
+        "pr": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "A GitHub pull request to check out as branch pr-<n>, as --pr."
+        },
+        "preset": {
+          "type": "string",
+          "description": "An [[agents.preset]] name, as --preset."
+        },
+        "lane": {
+          "type": "string",
+          "description": "A fleet lane, as --lane: its preset with cmd as one brief. A lane on another host is remote."
+        },
+        "cmd": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The program and its arguments, found on the daemon's PATH; left out for an empty tab."
+        },
+        "guard": {
+          "type": "boolean",
+          "description": "Run the agent under the guard, as --guard. Refused when the agent's hooks cannot deny."
+        }
+      },
+      "additionalProperties": false
+    },
+    "queueAdd": {
+      "description": "What pitwall queue add does: queue an agent to start in dir once the queue has room.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "dir"
+      ],
+      "properties": {
+        "type": {
+          "const": "queueAdd"
+        },
+        "id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name; left out for the most recently used one."
+        },
+        "dir": {
+          "type": "string",
+          "description": "An absolute path: the folder the agent runs in, or with worktree the repository."
+        },
+        "cmd": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The agent, its arguments and its prompt, found on the daemon's PATH."
+        },
+        "preset": {
+          "type": "string",
+          "description": "An [[agents.preset]] name, before cmd."
+        },
+        "model": {
+          "type": "string",
+          "description": "A model for the agent, as --model."
+        },
+        "at": {
+          "type": "string",
+          "description": "HH:MM in the daemon's time zone: the first start, as --at."
+        },
+        "every": {
+          "type": "string",
+          "description": "A Go duration such as 24h: repeat from the first start, as --every."
+        },
+        "worktree": {
+          "type": "string",
+          "description": "A fresh worktree of this name for each run, as --worktree."
+        }
+      },
+      "additionalProperties": false
+    },
+    "queueList": {
+      "description": "What pitwall queue ls does: the session's queued tasks, first to start first.",
+      "type": "object",
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "const": "queueList"
+        },
+        "id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name; left out for the most recently used one."
+        }
+      },
+      "additionalProperties": false
+    },
+    "queueDrop": {
+      "description": "What pitwall queue rm does: take a task off the queue.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "task"
+      ],
+      "properties": {
+        "type": {
+          "const": "queueDrop"
+        },
+        "id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        },
+        "task": {
+          "type": "string",
+          "description": "A task id from queueList, or its number there, 3 or #3, which needs session while more than one session is open."
+        }
+      },
+      "additionalProperties": false
+    },
+    "hostCheck": {
+      "description": "Whether a worker with these fields would start on this machine, as the check pitwall new --host asks a host for.",
+      "type": "object",
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "const": "hostCheck"
+        },
+        "id": {
+          "type": "string"
+        },
+        "dir": {
+          "type": "string",
+          "description": "The worker's folder: an absolute path, or ~/ for the daemon's home folder."
+        },
+        "repo": {
+          "type": "string",
+          "description": "A repository the worker needs: an absolute path, or ~/ for the daemon's home folder. Checks its origin and GitHub access."
+        },
+        "clone": {
+          "type": "string",
+          "description": "origin's URL, for the clone command a missing repo's fix gives."
+        },
+        "cmd": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The program and its arguments."
+        },
+        "preset": {
+          "type": "string",
+          "description": "An [[agents.preset]] name, before cmd."
+        },
+        "guard": {
+          "type": "boolean",
+          "description": "Check the guard too, as newTab with guard."
+        }
+      },
+      "additionalProperties": false
+    },
+    "adopt": {
+      "description": "What pitwall adopt does in a tab: make it the parent of orphans of its session on this machine.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "tab"
+      ],
+      "properties": {
+        "type": {
+          "const": "adopt"
+        },
+        "id": {
+          "type": "string"
+        },
+        "tab": {
+          "type": "string",
+          "description": "The tab that takes the orphans over: an address as pitwall kill takes it, or @ and a tab id."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session: its id, exact name or a unique prefix of its name. Needed for an address other than @ and an id while more than one session is open."
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Orphans' tab ids, with or without @, from listTabs with orphans."
+        },
+        "all": {
+          "type": "boolean",
+          "description": "Every orphan of the session. Remote while one is a worker on another host."
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

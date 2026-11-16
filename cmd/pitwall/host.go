@@ -22,16 +22,8 @@ import (
 	"github.com/quanticstudios/pitwall/internal/model"
 	"github.com/quanticstudios/pitwall/internal/nowindow"
 	"github.com/quanticstudios/pitwall/internal/proto"
-	"github.com/quanticstudios/pitwall/internal/ui/app"
 	"github.com/quanticstudios/pitwall/internal/update"
 )
-
-// guiDial is how a window connects and reconnects: dialOrStart, or a
-// remote's dial for pitwall --host.
-var guiDial = dialOrStart
-
-// hostArgs open another window on the same host: --host <name>, or none.
-var hostArgs []string
 
 // remoteMark starts the line remote-start prints. pitwall --host reads it
 // from the host's pitwall of any version, so its fields never change:
@@ -52,19 +44,6 @@ func parseHost(args []string) (host, session string, ok bool) {
 		return args[0], args[2], true
 	}
 	return "", "", false
-}
-
-// runHostGUI is runGUI on the daemon of an ssh host, which it starts when
-// none runs there.
-func runHostGUI(host, session string) error {
-	s, _ := config.Load()
-	r, err := newSSHHost(host, s.Hosts)
-	if err != nil {
-		return err
-	}
-	defer r.close()
-	app.Host, guiDial, hostArgs = host, r.dial, []string{"--host", host}
-	return runGUI(session)
 }
 
 // sshHost is a daemon on an ssh host. On unix one ssh connection, shared
@@ -183,32 +162,18 @@ func (r *sshHost) gitSSH() string {
 // shellQuote is s in single quotes for sh.
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// startCommand runs remote-start on the host. ssh hands it to the host's
-// login shell; every common one reads the single quotes alike, and sh then
-// looks in ~/.local/bin too, where get.sh installs and which the PATH of a
+// startCommand runs remote-start on the host, through pitwall-core when
+// the host has it, so a stale desktop pitwall cannot shadow it, else
+// through pitwall; neither exits 127. ssh hands it to the host's login
+// shell; every common one reads the single quotes alike, and sh then looks
+// in ~/.local/bin too, where get.sh installs and which the PATH of a
 // non-interactive ssh login often lacks.
 func startCommand(restart bool) string {
-	cmd := "pitwall remote-start"
+	cmd := ` remote-start`
 	if restart {
 		cmd += " --restart"
 	}
-	return `sh -c 'PATH="$PATH:$HOME/.local/bin" exec ` + cmd + `'`
-}
-
-// dial is dialOrStart on the host: it makes sure a daemon runs there,
-// forwards its socket here and completes the GUI handshake. After the link
-// drops, the backend calls it again, which opens a new ssh connection when
-// the old one died.
-func (r *sshHost) dial(session string, restart bool) (*proto.Conn, proto.StateMsg, error) {
-	nc, err := r.socket(restart)
-	if err != nil {
-		return nil, proto.StateMsg{}, err
-	}
-	conn, initial, err := guiHandshake(nc, "", session)
-	if err != nil && !errors.As(err, new(incompatible)) {
-		err = fmt.Errorf("daemon handshake on %s failed: %w; see daemon.log there (pitwall logs)", r.name, err)
-	}
-	return conn, initial, err
+	return `sh -c 'PATH="$PATH:$HOME/.local/bin"; b=pitwall; command -v pitwall-core >/dev/null && b=pitwall-core; exec "$b"` + cmd + `'`
 }
 
 // socket makes sure a daemon runs on the host, forwards its socket here
@@ -324,7 +289,7 @@ func (r *sshHost) sshError(stderr string, err error) error {
 	}
 	switch code := exit.ExitCode(); {
 	case code == 127:
-		return fmt.Errorf("pitwall is not installed on %s: it is not on the PATH there or in ~/.local/bin. Install it with:\n  %s", r.name, r.install())
+		return fmt.Errorf("pitwall is not installed on %s: neither pitwall-core nor pitwall is on the PATH there or in ~/.local/bin. Install pitwall with:\n  %s", r.name, r.install())
 	case code == 2 && strings.Contains(stderr, "usage:"):
 		return fmt.Errorf("pitwall on %s is too old to serve a window over ssh. Update it with:\n  %s", r.name, r.install())
 	case code == 255:

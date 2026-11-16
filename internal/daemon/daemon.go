@@ -318,6 +318,11 @@ type Daemon struct {
 	served    context.Context // Serve's, ended when the daemon stops
 	gate      acceptGate
 	handedOff bool
+	// lines serves the socket's JSON clients (lines.go), set by Serve.
+	lines *web.Server
+	// ctlWatch are the control commands watching state and pane exits;
+	// see control.go. Guarded by mu.
+	ctlWatch map[*ctlWatch]bool
 
 	// prog is, per pane, its OSC 7501 records, and progSeq numbers program
 	// reports as they arrive; see program.go. prog is guarded by mu.
@@ -536,6 +541,30 @@ func NewWith(o Options) (*Daemon, error) {
 
 // fromState is a daemon holding st and no panes.
 func fromState(o Options, st model.State) *Daemon {
+	st.Starts = maps.Clone(st.Starts)
+	// Older state has only live tabs and the bounded reopen archive.
+	// Retain those identities before startup can prune either of them.
+	remember := func(w model.Workspace, name string) {
+		if !w.ClientID {
+			return
+		}
+		if st.Starts == nil {
+			st.Starts = map[string]model.TabStart{}
+		}
+		if _, ok := st.Starts[w.ID]; !ok {
+			st.Starts[w.ID] = model.TabStart{SessionID: w.SessionID, SessionName: name, Parent: w.Parent}
+		}
+	}
+	for _, w := range st.Workspaces {
+		name := ""
+		if s := st.Session(w.SessionID); s != nil {
+			name = s.Name
+		}
+		remember(w, name)
+	}
+	for _, c := range st.Closed {
+		remember(c.Tab, c.Session)
+	}
 	st.DevProxyPort = 0 // A handoff's listener belongs to the sending daemon.
 	if o.StatsInterval == 0 {
 		o.StatsInterval = 30 * time.Second
@@ -575,10 +604,12 @@ func (d *Daemon) Serve(ctx context.Context, ln net.Listener) error {
 	defer cancel()
 	d.mu.Lock()
 	d.ln, d.stop, d.served = ln, cancel, ctx
+	d.lines = &web.Server{Version: Build, Control: ctlHub{d}}
 	d.awakeWake = make(chan struct{}, 1)
 	d.mu.Unlock()
 	context.AfterFunc(ctx, func() {
 		ln.Close()
+		d.lines.Close()
 		d.mu.Lock()
 		d.stopRestores()
 		d.mu.Unlock()
@@ -772,7 +803,8 @@ func (d *Daemon) writeLoop(c *client, done <-chan struct{}) {
 // and PaneExited pushes, and "watch" the first and last of those; every kind
 // gets Error replies to failed requests. Any Hello.Level of proto.Version is
 // served; see proto.Version for what that asks of a new message type. A hook
-// of any Version is served too, its AgentEvents alone.
+// of any Version is served too, its AgentEvents alone. On Linux a client
+// that opens with '{' speaks the web protocol as JSON lines instead.
 func (d *Daemon) serveConn(ctx context.Context, nc net.Conn) {
 	var skillshareCalls skillshareCalls
 	defer skillshareCalls.close()
@@ -787,6 +819,14 @@ func (d *Daemon) serveConn(ctx context.Context, nc net.Conn) {
 	stop := context.AfterFunc(ctx, func() { nc.Close() })
 	defer stop()
 
+	isJSON, err := jsonClient(nc)
+	if err != nil {
+		return
+	}
+	if isJSON {
+		d.lines.ServeLines(nc)
+		return
+	}
 	m, err := conn.Recv()
 	if err != nil {
 		return
@@ -798,7 +838,7 @@ func (d *Daemon) serveConn(ctx context.Context, nc net.Conn) {
 		// waits for it: closing it after Commit would read as the new
 		// daemon dying and resume these panes under two readers.
 		stop()
-		d.serveHandoff(nc, conn)
+		d.serveHandoff(nc, conn, hello.Level)
 		return
 	}
 	// A hook of another Version is served: its AgentEvent never changes.
@@ -1405,6 +1445,18 @@ func (d *Daemon) newWorkspace(ctx context.Context, m proto.NewWorkspace) (result
 			result = errors.Join(result, d.removeWorktree(cleanup, owned, path, model.PortBlock{}, fresh, true, true, ""))
 		}
 	}()
+	if err := ctx.Err(); err != nil {
+		failedStart = true
+		return err
+	}
+	if d.closing || d.handedOff {
+		failedStart = true
+		return errors.New("daemon is closing")
+	}
+	if d.st.Session(p.SessionID) == nil {
+		failedStart = true
+		return fmt.Errorf("no session %s", p.SessionID)
+	}
 	if m.ID != "" {
 		// why: the same id may have started while the worktree was made.
 		if started, err := d.startedTab(m.ID, p.SessionID, m.ParentTab); started || err != nil {
@@ -1466,6 +1518,7 @@ func (d *Daemon) newWorkspace(ctx context.Context, m proto.NewWorkspace) (result
 			}
 		}
 	}
+	d.rememberStart(w, m.ParentPane)
 	d.changed()
 	if err != nil {
 		return err
@@ -1599,26 +1652,33 @@ func (d *Daemon) openPane(m proto.OpenPane) error {
 }
 
 func (d *Daemon) openPaneFile(m proto.OpenPane, path string) error {
+	_, err := d.openPaneEnv(m, path, nil)
+	return err
+}
+
+// openPaneEnv opens the pane m asks for, with the scrollback in path when
+// set and extra added to its environment, and returns its id.
+func (d *Daemon) openPaneEnv(m proto.OpenPane, path string, extra []string) (string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	w := d.workspace(m.WorkspaceID)
 	if w == nil {
-		return fmt.Errorf("no workspace %s", m.WorkspaceID)
+		return "", fmt.Errorf("no workspace %s", m.WorkspaceID)
 	}
 	if w.Chat != "" {
-		return errors.New("a chat tab has no panes")
+		return "", errors.New("a chat tab has no panes")
 	}
 	if w.Monitor {
-		return errors.New("a Monitor tab has no panes")
+		return "", errors.New("a Monitor tab has no panes")
 	}
 	var t *model.Tab
 	if ti := tabIndex(w, m.TabID); ti >= 0 {
 		t = &w.Tabs[ti]
 	} else if m.TabID != "" {
-		return fmt.Errorf("no tab %s in session %s", m.TabID, w.ID)
+		return "", fmt.Errorf("no tab %s in session %s", m.TabID, w.ID)
 	}
 	if m.Target != "" && (t == nil || !slices.Contains(layout.Panes(t.Layout), m.Target)) {
-		return fmt.Errorf("no pane %s in tab %q of session %s", m.Target, m.TabID, w.ID)
+		return "", fmt.Errorf("no pane %s in tab %q of session %s", m.Target, m.TabID, w.ID)
 	}
 	// A split opens where the pane it splits is, which a cd may have moved
 	// away from the session's folder.
@@ -1629,9 +1689,9 @@ func (d *Daemon) openPaneFile(m proto.OpenPane, path string) error {
 		}
 	}
 	id := newID()
-	env := d.profileEnv(w)
+	env := append(d.profileEnv(w), extra...)
 	if err := d.start(id, m.Cmd, cwd, w.Ports, env); err != nil {
-		return err
+		return "", err
 	}
 	if path != "" {
 		d.cleanScrollback(id, d.panes[id], path)
@@ -1649,7 +1709,7 @@ func (d *Daemon) openPaneFile(m proto.OpenPane, path string) error {
 		t.Layout = d.o.Split(t.Layout, m.Target, id, m.Dir)
 	}
 	d.changed()
-	return nil
+	return id, nil
 }
 
 // closePane closes a pane, and its tab and session when it was their last.
@@ -1878,7 +1938,18 @@ func (d *Daemon) agentEvent(ctx context.Context, m proto.AgentEvent) error {
 	if q := d.quiet[p.ID]; q != nil && mapped && activity.State != "" {
 		q.since = now
 	}
-	if agent.BackgroundRunning(m.Payload) {
+	if tasks := agent.BackgroundTasks(m.Payload); len(tasks) > 0 {
+		log.Printf("pane %s: Stop with background tasks %s", p.ID, strings.Join(tasks, " "))
+	}
+	// why: no new turn follows when the work a Stop waited on ends without waking the agent; a SubagentStop may be the only sign.
+	bgEnded := d.live.background[p.ID] && prev != nil && prev.State == model.StateWorking && agent.BackgroundEnded(m.Payload)
+	if bgEnded {
+		next, derived = *prev, true
+		next.State, next.UpdatedAt = model.StateCompleted, now
+		delete(d.live.background, p.ID)
+	}
+	bgRunning := agent.BackgroundRunning(m.Payload)
+	if bgRunning {
 		if d.live.background == nil {
 			d.live.background = map[string]bool{}
 		}
@@ -1903,8 +1974,12 @@ func (d *Daemon) agentEvent(ctx context.Context, m proto.AgentEvent) error {
 	if derived && !keep {
 		d.recordExplanation(p.ID, m.Provider, next.State, "hook", agent.ScreenTrace{})
 		changed = true
-		if msg := agent.LastMessage(m.Payload); next.State == model.StateCompleted && msg != "" {
+		// why: a later SubagentStop can end the hold without another main-turn reply.
+		msg := agent.LastMessage(m.Payload)
+		if !bgEnded && msg != "" && (next.State == model.StateCompleted || bgRunning) {
 			d.keepReply(p.ID, msg)
+		}
+		if next.State == model.StateCompleted && (bgEnded || msg != "") {
 			d.relayReview(p.ID)
 		}
 		if next.State == model.StateError {
@@ -1927,7 +2002,7 @@ func (d *Daemon) agentEvent(ctx context.Context, m proto.AgentEvent) error {
 			if next.State == model.StateCompleted && (prev == nil || prev.State != model.StateCompleted) {
 				go d.refreshStats(ctx, p.WorkspaceID)
 			}
-			if next.State == model.StateCompleted || next.State == model.StateError {
+			if (next.State == model.StateCompleted || next.State == model.StateError) && !bgEnded {
 				if msg, resets, ok := agent.UsageLimit(agent.LastMessage(m.Payload), resumeNow()); ok && d.resumeOn() {
 					id, turn := p.ID, next.UpdatedAt
 					d.lim.seenMsg(id, msg)
@@ -2161,6 +2236,9 @@ func (d *Daemon) start(id string, cmd []string, cwd string, ports model.PortBloc
 }
 
 func (d *Daemon) startVT(id string, cmd []string, cwd string, ports model.PortBlock, env []string, newVT vt.NewFunc) error {
+	if d.closing || d.handedOff {
+		return errors.New("daemon is closing")
+	}
 	if err := guardGate(cmd, env, cwd); err != nil {
 		err = fmt.Errorf("%w: %v", errUnguarded, err)
 		log.Printf("pane %s: %v", id, err)
@@ -2494,6 +2572,9 @@ func (d *Daemon) exited(id string, p Pane) {
 	for c := range d.watchers {
 		c.queue(proto.PaneExited{Pane: id, ExitCode: code})
 	}
+	for w := range d.ctlWatch {
+		w.exited(id, code)
+	}
 	d.mu.Unlock()
 	closeAll(closing)
 }
@@ -2550,6 +2631,9 @@ func (d *Daemon) changed() {
 	}
 	for s := range d.listSinks {
 		s.ListChanged()
+	}
+	for w := range d.ctlWatch {
+		w.changed()
 	}
 	if !d.savePending && !d.closing {
 		d.savePending = true
@@ -2625,10 +2709,11 @@ func (d *Daemon) saveState(history bool) error {
 	return nil
 }
 
-// saveSnapshot is snapshot with each live pane's current directory, so a
-// restart relaunches the shell where the user left it.
+// saveSnapshot is snapshot with the start history and each live pane's
+// current directory, so a restart relaunches the shell where the user left it.
 func (d *Daemon) saveSnapshot() model.State {
 	s := d.snapshot()
+	s.Starts = maps.Clone(d.st.Starts)
 	s.Activities = append(s.Activities, d.restoreActivities()...)
 	for i, p := range s.Panes {
 		if h := d.panes[p.ID]; h != nil && !p.Exited {
@@ -2683,6 +2768,7 @@ func (d *Daemon) snapshot() model.State {
 	s.Tasks = slices.Clone(s.Tasks)
 	s.Chats = slices.Clone(s.Chats)   // chatChanged updates entries in place
 	s.Closed = slices.Clone(s.Closed) // checkClosed sets Gone in place
+	s.Starts = nil                    // grows with every JSON start, and no client reads it
 	s.Forms = slices.Clone(s.Forms)
 	for i := range s.Closed {
 		s.Closed[i].Pane.History = nil

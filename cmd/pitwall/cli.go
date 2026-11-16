@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -24,6 +23,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 	"github.com/quanticstudios/pitwall/internal/config"
+	"github.com/quanticstudios/pitwall/internal/control"
 	"github.com/quanticstudios/pitwall/internal/forge"
 	"github.com/quanticstudios/pitwall/internal/gitstat"
 	"github.com/quanticstudios/pitwall/internal/guard"
@@ -101,9 +101,12 @@ func syncMsg(conn *cliConn, requests ...any) (proto.StateMsg, error) {
 	if err := conn.socket.SetDeadline(time.Now().Add(wait)); err != nil {
 		return proto.StateMsg{}, err
 	}
+	// A daemon that refuses this client closes at once, so a send can fail
+	// with its reason still unread: read on, and report the reason.
+	var sendErr error
 	for _, request := range append(requests, proto.Sync{}) {
-		if err := conn.Send(request); err != nil {
-			return proto.StateMsg{}, err
+		if sendErr = conn.Send(request); sendErr != nil {
+			break
 		}
 	}
 	var daemonErr error
@@ -112,6 +115,9 @@ func syncMsg(conn *cliConn, requests ...any) (proto.StateMsg, error) {
 		if err != nil {
 			if daemonErr != nil {
 				return proto.StateMsg{}, daemonErr
+			}
+			if sendErr != nil {
+				return proto.StateMsg{}, sendErr
 			}
 			return proto.StateMsg{}, err
 		}
@@ -122,6 +128,13 @@ func syncMsg(conn *cliConn, requests ...any) (proto.StateMsg, error) {
 			return m, daemonErr
 		}
 	}
+}
+
+// versionRefusal explains the daemon's refusal of this proto.Version: it
+// speaks v. update brings this binary to the latest release and moves the
+// daemon onto it.
+func versionRefusal(v int) error {
+	return fmt.Errorf("the daemon speaks protocol version %d and this %s %s speaks %d; run %s update to bring both to one version", v, binName, versionString(), proto.Version, binName)
 }
 
 func runCLI(args []string, in *os.File, out, errOut io.Writer) int {
@@ -167,10 +180,23 @@ func runCLI(args []string, in *os.File, out, errOut io.Writer) int {
 		err = sessionCommand(args, in, out, errOut)
 	}
 	if err != nil {
+		if v, refused := proto.RefusedVersion(proto.Error{Message: err.Error()}); refused {
+			err = versionRefusal(v)
+		}
 		fmt.Fprintln(errOut, "pitwall:", err)
+		var c codeError
+		if errors.As(err, &c) {
+			return c.code
+		}
 		return 1
 	}
 	return 0
+}
+
+// codeError is an error a command exits with code for, not 1.
+type codeError struct {
+	code int
+	error
 }
 
 // withIssue is cmd with GitHub issue n of the repository at dir as its
@@ -686,6 +712,9 @@ func sessionCommand(args []string, in *os.File, out, errOut io.Writer) error {
 	var request any
 	switch command {
 	case "attach":
+		if err := needsWindow(state, w.SessionID); err != nil {
+			return err
+		}
 		after, err := syncCLI(conn, proto.FocusSession{WorkspaceID: w.ID})
 		if err != nil {
 			return err
@@ -749,44 +778,19 @@ func shownInWindows(host string) bool {
 	return slices.ContainsFunc(s.Hosts, func(h config.Host) bool { return h.Name == host && h.Window })
 }
 
-// launch is the command and environment of a tab that new, worktree new
-// or queue add opens: preset's agent and args before rest, else rest, its
-// program made absolute; preset's variables, and guard.Env when guarded or
-// the preset asks for the guard. With here false the program is left as
-// it is: it runs on another host, whose daemon finds it on its own PATH.
+// launch is control.Launch with this user's presets, its program made
+// absolute. With here false the program is left as it is: it runs on
+// another host, whose daemon finds it on its own PATH.
 func launch(preset string, guarded bool, rest []string, here bool) (cmd, vars []string, err error) {
-	cmd = rest
-	if preset != "" {
-		s, _ := config.Load()
-		p, ok := s.FindPreset(preset)
-		if !ok {
-			return nil, nil, fmt.Errorf("no preset %q in %s", preset, config.Path())
-		}
-		cmd = append(append([]string{p.Agent}, p.Args...), rest...)
-		vars, guarded = slices.Clone(p.Env), guarded || p.Guard
-	}
-	if guarded {
-		if len(cmd) == 0 {
-			return nil, nil, errors.New("--guard needs an agent to run: --guard -- claude")
-		}
-		vars = append(vars, guard.Env+"=1")
-	}
-	if len(cmd) > 0 && here {
+	s, _ := config.Load()
+	if cmd, vars, err = control.Launch(s, preset, guarded, rest); err == nil && len(cmd) > 0 && here {
 		err = absCmd(cmd)
 	}
 	return cmd, vars, err
 }
 
-// withModel applies a CLI model override after resolving a preset.
-func withModel(cmd []string, selection string) ([]string, error) {
-	if strings.TrimSpace(selection) == "" {
-		return cmd, nil
-	}
-	if len(cmd) == 0 {
-		return nil, errors.New("--model needs an agent to run: --model opus -- claude")
-	}
-	return append([]string{cmd[0]}, config.WithModel(cmd[0], cmd[1:], selection)...), nil
-}
+// withModel is control.WithModel.
+var withModel = control.WithModel
 
 // hostLevel is varsLevel for a tab on another host. From a pitwall pane
 // the host must also keep the part of each session apart (OriginLevel),
@@ -829,143 +833,36 @@ func absCmd(cmd []string) error {
 	return err
 }
 
-// currentSession is the session tab commands act on: the one named name
-// (exactly, else by unique prefix), else the session of $PITWALL_PANE,
-// else the most recently used one.
+// envCaller is the caller this process is: session as -s named it, in
+// the pane $PITWALL_PANE names.
+func envCaller(session string) control.Caller {
+	return control.Caller{Session: session, Pane: os.Getenv("PITWALL_PANE")}
+}
+
+// currentSession is control.CurrentSession for the calling pane: the
+// session named name, else the pane's, else the most recently used one.
 func currentSession(state model.State, name string) (model.Session, error) {
-	if name != "" {
-		return resolveSession(state, name)
-	}
-	if pane := os.Getenv("PITWALL_PANE"); pane != "" {
-		for _, p := range state.Panes {
-			if p.ID == pane {
-				if s := state.Session(state.SessionOf(p.WorkspaceID)); s != nil {
-					return *s, nil
-				}
-			}
-		}
-	}
-	if s := state.Recent(); s != nil {
-		return *s, nil
-	}
-	return model.Session{}, errors.New("no session is open")
+	return control.CurrentSession(state, envCaller(name))
 }
 
-// resolveSession finds a session by exact name, then by unique prefix.
-func resolveSession(state model.State, name string) (model.Session, error) {
-	if s := state.SessionNamed(name); s != nil {
-		return *s, nil
-	}
-	var found []model.Session
-	for _, s := range state.Sessions {
-		if strings.HasPrefix(s.Name, name) {
-			found = append(found, s)
-		}
-	}
-	switch len(found) {
-	case 0:
-		return model.Session{}, fmt.Errorf("no session matches %q (see pitwall session ls)", name)
-	case 1:
-		return found[0], nil
-	}
-	var names []string
-	for _, s := range found {
-		names = append(names, s.Name)
-	}
-	return model.Session{}, fmt.Errorf("ambiguous session %q; matches %s", name, strings.Join(names, ", "))
-}
+// resolveSession is control.ResolveSession.
+var resolveSession = control.ResolveSession
 
-// resolveTab finds a tab by @ and its id or one of its panes' ids, in any
-// session, or a tab of session by its id, then by its number in
-// pitwall ls ("3" or "#3"), then by exact title, then by a unique title
-// prefix. With no name it is the tab of $PITWALL_PANE, in whichever session.
+// resolveTab is control.ResolveTab for the calling pane: with no name it
+// is that pane's tab.
 func resolveTab(state model.State, session, name string) (model.Workspace, error) {
-	if name == "" {
-		pane := os.Getenv("PITWALL_PANE")
-		for _, p := range state.Panes {
-			if pane != "" && p.ID == pane {
-				for _, w := range state.Workspaces {
-					if w.ID == p.WorkspaceID {
-						return w, nil
-					}
-				}
-			}
-		}
-		if pane != "" {
-			return model.Workspace{}, fmt.Errorf("pane %q has no tab in daemon state", pane)
-		}
-		return model.Workspace{}, errors.New("specify a tab name outside a pitwall pane (see pitwall ls)")
-	}
-	if id, ok := strings.CutPrefix(name, "@"); ok {
-		if i := slices.IndexFunc(state.Workspaces, func(w model.Workspace) bool { return w.ID == id }); i >= 0 {
-			return state.Workspaces[i], nil
-		}
-		w, _, err := resolvePane(state, session, name)
-		return w, err
-	}
-	tabs := numbered(state, session)
-	if i := slices.IndexFunc(tabs, func(w model.Workspace) bool { return w.ID == name }); i >= 0 {
-		return tabs[i], nil
-	}
-	if n, err := strconv.Atoi(strings.TrimPrefix(name, "#")); err == nil {
-		if n < 1 || n > len(tabs) {
-			return model.Workspace{}, fmt.Errorf("no tab #%d (see pitwall ls)", n)
-		}
-		return tabs[n-1], nil
-	}
-	var exact, prefixed []int
-	for i, w := range tabs {
-		switch t := tabTitle(w); {
-		case t == name:
-			exact = append(exact, i)
-		case strings.HasPrefix(t, name):
-			prefixed = append(prefixed, i)
-		}
-	}
-	matches := exact
-	if len(matches) == 0 {
-		matches = prefixed
-	}
-	switch len(matches) {
-	case 0:
-		return model.Workspace{}, fmt.Errorf("no tab matches %q (see pitwall ls)", name)
-	case 1:
-		return tabs[matches[0]], nil
-	}
-	var nums []string
-	for _, i := range matches {
-		nums = append(nums, "#"+strconv.Itoa(i+1))
-	}
-	return model.Workspace{}, fmt.Errorf("ambiguous tab %q; matches %s", name, strings.Join(nums, ", "))
+	return control.ResolveTab(state, envCaller(""), session, name)
 }
 
 // numbered is model.State.Numbered.
 func numbered(state model.State, session string) []model.Workspace { return state.Numbered(session) }
 
-// tabTitle is what the sidebar shows for a tab: its chosen name, else its
-// label.
-func tabTitle(w model.Workspace) string {
-	if w.NameSet {
-		return w.Name
-	}
-	return cmp.Or(w.Label, w.Name)
-}
+// tabTitle is control.Title.
+var tabTitle = control.Title
 
-// childTabs is the set of tabs the calling pane's tab opened (their
-// Parent), for --children.
+// childTabs is control.ChildTabs for the calling pane.
 func childTabs(state model.State) (map[string]bool, error) {
-	pane := os.Getenv("PITWALL_PANE")
-	i := slices.IndexFunc(state.Panes, func(p model.Pane) bool { return p.ID == pane })
-	if pane == "" || i < 0 {
-		return nil, errors.New("--children must run inside a pitwall pane (PITWALL_PANE is not set)")
-	}
-	out := map[string]bool{}
-	for _, w := range state.Workspaces {
-		if w.Parent != "" && w.Parent == state.Panes[i].WorkspaceID {
-			out[w.ID] = true
-		}
-	}
-	return out, nil
+	return control.ChildTabs(state, envCaller(""))
 }
 
 // listTabs prints one row per tab of session, or of only when it is not

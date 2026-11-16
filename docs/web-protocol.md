@@ -27,6 +27,7 @@ ENG-2708 pull requests.
 - [Backpressure](#backpressure)
 - [Commands](#commands)
 - [Pull requests](#pull-requests)
+- [Control](#control)
 - [Results and errors](#results)
 - [aide's SessionTransport](#transport)
 - [Versioning](#versioning)
@@ -117,6 +118,57 @@ A client that gets 4002 does not retry with the same version. A client
 that gets 1001 or loses the connection reconnects with backoff and
 [resyncs](#resync).
 
+<a id="local-socket"></a>
+### The local socket
+
+On Linux the daemon's own Unix socket, `$PITWALL_SOCKET` in every pane,
+speaks this protocol too, as JSON lines. The daemon reads the first byte
+of each connection without taking it: `{` starts a JSON client, and
+anything else is one of pitwall's own clients, as before. macOS and
+Windows serve only pitwall's own clients there for now.
+
+- Each frame is one JSON object on one line, ended by `\n`, both ways.
+  The server never puts a line break inside a frame. Blank lines are
+  skipped. A line over 16 MiB ends the connection with 1009.
+- `hello` needs no `token`, and one sent is ignored. Whoever can open the
+  socket is trusted, as pitwall's own commands are: the socket's folder
+  belongs to the user with mode 0700, and the daemon refuses a folder that
+  other users can open.
+- The first byte must come within 10 s, and `hello` within 10 s after it.
+- Where WebSocket sends a close frame, the socket sends a `close` line
+  with the same code and reason, then closes:
+
+```json
+{"type": "close", "code": 4002, "reason": "pitwall speaks protocol 1, client sent 2: update aide or pitwall"}
+```
+
+- It serves no chats and no pull request commands. `welcome` lists the
+  [control](#control) commands, and every other command gets
+  `unsupported`. Neither TCP listener serves the control commands.
+- A daemon from before the JSON socket closes the connection on the first
+  line, so a client that reads EOF right after its `hello` has an older
+  pitwall.
+
+A minimal session, with `socat`:
+
+```sh
+printf '%s\n' '{"type":"hello","protocol":1,"client":{"name":"script"}}' |
+  socat - UNIX-CONNECT:"$PITWALL_SOCKET"
+```
+
+To reach another machine's daemon, forward its socket to a socket in a
+folder only you can open, never to a TCP port, which any local user could
+connect to. `pitwall remote-start` on that machine prints the socket's
+path there as the last field of its line:
+
+```sh
+mkdir -m 700 -p ~/.pitwall-hosts
+ssh -fN -L ~/.pitwall-hosts/box.sock:/run/user/1000/pitwall/pitwall.sock box
+```
+
+OpenSSH creates the local socket with mode 0600 (`StreamLocalBindMask`
+0177).
+
 <a id="frames"></a>
 ## Frames
 
@@ -126,7 +178,7 @@ that gets 1001 or loses the connection reconnects with backoff and
   connection. The server answers each command with exactly one `result`
   that carries the same `id`.
 - The server sends `welcome`, `result`, `error`, and the pushed messages
-  `sessions`, `sessionsChanged`, `deltas` and `removed`.
+  `sessions`, `sessionsChanged`, `deltas`, `removed` and `tabs`.
 - The server handles one connection's commands in the order they arrive,
   but results can come back in another order, since commands to different
   chats run on different chat loops. Pushed messages for one chat keep
@@ -298,8 +350,19 @@ Each connection has one outgoing queue. When it passes 256 messages or
    most one snapshot per chat.
 3. Deltas numbered after that snapshot follow as usual.
 
-`result` and `error` messages are never dropped. They are bounded by the
-client's own commands. The server does not merge deltas per client; that
+`result`, `error` and `removed` messages are kept while the connection is
+open. At 64 queued frames or 8 MiB the server stops reading commands
+until fewer than half are left. Before queuing a reply it also waits for
+space for that reply, so the next result cannot push the queue past the
+limit. Asynchronous chat removals cannot wait on the daemon; if one
+cannot fit, the connection closes with 1008 and the client resyncs.
+
+On the [local socket](#local-socket) a single result over 4 MiB is sent
+as `tooLarge` instead. If the request ID makes even that error result
+exceed 4 MiB, the connection closes with 1009. WebSocket keeps its large
+chat replies: one reply may exceed 8 MiB when no other result, error or
+removal is queued. Further replies wait for it to leave the queue.
+The server does not merge deltas per client; that
 would break the rule that `seq` steps by one.
 
 A client whose writes block for 30 s is closed with 1008 (`client too
@@ -803,6 +866,384 @@ and polls the pull request again at once, so the list shows it merged. It
 answers `conflict` when the pull request is not open. Confirming is the
 client's, as pitwall's merge dialog is.
 
+<a id="control"></a>
+## Control
+
+On the [local socket](#local-socket) only, programs drive pitwall's tabs
+as its commands for agents do ([agent-skill.md](agent-skill.md)). Each
+command does what the CLI command in the table does, with the CLI's own
+code, and its result's `data` holds what that command prints.
+
+| Command | CLI | Data on success |
+| --- | --- | --- |
+| `listTabs` | `pitwall ls --json` | `session`, `tabs` |
+| `subscribeTabs`, `unsubscribeTabs` | none | none; `tabs` frames follow |
+| `readPane` | `pitwall read` | `text` |
+| `scrollback` | `pitwall scrollback` | `text` |
+| `waitPane` | `pitwall wait` | `outcome`, and `state`, `question` or `exit` |
+| `newTab` | `pitwall new` | `tab`, `pane`, or `tab` and `closed` |
+| `splitPane` | `pitwall split` | `pane` |
+| `sendPane` | `pitwall send` | none |
+| `promptPane` | `pitwall prompt` | none, or with `wait` `outcome` and `reply` or `question` |
+| `killTab`, `renameTab`, `detachTab` | `pitwall kill`, `rename`, `detach` | none |
+| `focusTab` | `pitwall attach`, without opening a window | none |
+| `tabNew`, `tabClose` | `pitwall tab new`, `tab close` in that pane | `tab`, none |
+| `setStatus` | `pitwall status` | none |
+| `worktreeNew` | `pitwall worktree new` in the repo | `tab`, `pane` |
+| `queueAdd`, `queueDrop` | `pitwall queue add`, `queue rm` | none |
+| `queueList` | `pitwall queue ls` | `session`, `tasks` |
+| `hostCheck` | the check `pitwall new --host` asks a host for | `problems` |
+| `adopt` | `pitwall adopt` run in `tab` | `adopted` |
+
+These commands act on this machine only. A request that would start or
+change a worker on another host answers `remote` and names the host, so
+nothing starts there; use the CLI, or that host's socket.
+
+A program outside a pane has no pane or session of its own, so a request
+names them:
+
+- `tab` is a tab's address as `pitwall kill` takes it, the same as
+  `pane` without `TAB.N`; `@` and a tab id from `listTabs` works too.
+- `pane` is an address as `pitwall read` takes it: `#N` or `N` for a tab's
+  main pane, `TAB.N` for its Nth pane, a title or a unique title prefix,
+  or `@` and a pane id from `listTabs`, which stays valid while tabs move.
+- `session` is a session's id, its exact name or a unique prefix of its
+  name. While more than one session is open, an address other than `@` and
+  an id needs it, so `#1` cannot reach a tab in another session than the
+  one the program meant. `listTabs` and `subscribeTabs` without it take
+  the most recently used session, and their data names it.
+- A key the command does not take is `invalid`.
+
+A worker that a tab started on another host (`pitwall new --host`) shows
+in `listTabs` as a stale row: `stale: true`, `state: "unknown"`, its
+`host`, `addr` `@` and its id, and no panes. This daemon records the
+worker but not its state. For its state, forward that host's socket as
+in [The local socket](#local-socket) and ask that daemon. An address of
+such a worker, or `box:3` for a host's tab, answers `remote` and names
+the host.
+
+### listTabs
+
+`tabs` are the rows of `pitwall ls --json`, the same fields with the same
+meanings ([agent-skill.md](agent-skill.md)). `children` (a pane id) lists
+only the tabs that pane's tab opened, as `ls --children` run in that pane
+does; `orphans` lists workers whose parent tab is gone, as
+`ls --orphans`. Rows never carry a command line or an environment.
+
+```json
+{"type": "listTabs", "id": "c1", "session": "work"}
+```
+
+```json
+{"type": "result", "id": "c1", "ok": true, "data": {"session": {"id": "4f1c2a9e", "name": "work"}, "tabs": [{"n": 1, "id": "a3f2", "title": "fix-login", "group": "pitwall", "cwd": "/home/me/src/pitwall", "branch": "fix-login", "agent": "claude", "state": "working", "question": "", "exit_code": null, "panes": 1, "detached": false, "pane_list": [{"n": 1, "id": "p7c1", "agent": "claude", "state": "working", "question": "", "exit_code": null, "queued": 0, "since": "2026-11-15T09:12:00Z"}], "parent": "", "since": "2026-11-15T09:12:00Z", "pr_state": "", "quiet_since": null, "status": "", "host": "", "addr": "#1", "stale": false}, {"n": 0, "id": "b9e0", "title": "", "group": "", "cwd": "", "branch": "", "agent": "", "state": "unknown", "question": "", "exit_code": null, "panes": 0, "detached": false, "pane_list": [], "parent": "a3f2", "since": null, "pr_state": "", "quiet_since": null, "status": "", "host": "box", "addr": "@b9e0", "stale": true}]}}
+```
+
+### subscribeTabs and unsubscribeTabs
+
+After its result, `subscribeTabs` pushes a `tabs` frame with the
+session's tabs as `listTabs` gives them, then another each time they
+change. Changes close together come as one frame, and a client that
+reads slowly gets the latest list rather than every one. A second
+`subscribeTabs` replaces the first; `unsubscribeTabs` stops them.
+
+```json
+{"type": "subscribeTabs", "id": "c2", "session": "work"}
+```
+
+```json
+{"type": "tabs", "session": {"id": "4f1c2a9e", "name": "work"}, "tabs": []}
+```
+
+```json
+{"type": "unsubscribeTabs", "id": "c3"}
+```
+
+### readPane and scrollback
+
+`readPane` is the reply the pane's agent last finished, or with `screen`
+the text on the pane's screen. `scrollback` is the pane's history and
+screen; `lines` keeps only the last lines, at most 10,000. A text over
+4 MiB is `tooLarge`: ask for fewer `lines`.
+
+```json
+{"type": "readPane", "id": "c4", "session": "work", "pane": "#1", "screen": true}
+```
+
+```json
+{"type": "result", "id": "c4", "ok": true, "data": {"text": "$ go test ./...\nok  \tgithub.com/quanticstudios/pitwall/internal/web\t1.2s"}}
+```
+
+```json
+{"type": "scrollback", "id": "c5", "pane": "@p7c1", "lines": 200}
+```
+
+### waitPane
+
+`waitPane` answers once the pane gets to `until`, as `pitwall wait` does:
+`done` (its agent finished a turn), `idle`, `blocked` or `exit`. It
+remembers what it saw while it waits, so `done` after an interrupted turn
+that ended idle still counts. `outcome` says why it ended:
+
+| `outcome` | Means | Also in `data` |
+| --- | --- | --- |
+| `reached` | the pane got to `until` | `state` |
+| `blocked` | its agent waits on a person | `question` |
+| `exited` | its process ended | `exit`: `code`, `unknown`, `signal` |
+| `closed` | the pane closed without an exit code, on purpose | none |
+
+`exit.code` is the program's own, so a program that exits 2 is `exited`
+with `code` 2. `unknown` means the daemon restarted while it ran;
+`signal` that a signal ended it, with a negative `code`. With
+`timeoutMs`, a wait that has not ended by then answers `timeout`. It is
+0 for no timer, or at most 9223372036854 milliseconds. Up to
+64 waits can be pending on one connection; more answer `busy`. A client
+that closes its sending side gets no result of a pending wait.
+
+```json
+{"type": "waitPane", "id": "c6", "session": "work", "pane": "#2", "until": "exit", "timeoutMs": 600000}
+```
+
+```json
+{"type": "result", "id": "c6", "ok": true, "data": {"outcome": "exited", "exit": {"code": 3, "unknown": false, "signal": false}}}
+```
+
+```json
+{"type": "result", "id": "c7", "ok": false, "code": "timeout", "message": "timed out after 10m0s"}
+```
+
+### newTab
+
+`newTab` opens a tab in `dir`, an absolute path, running `cmd`, a
+preset's agent before `cmd`, or a shell, as `pitwall new` does with
+`-n` (`name`), `-d` (`detached`), `--preset`, `--model` and `--guard`.
+The daemon finds the program on its own `PATH`. `parentPane`, a pane id,
+is the agent that asks for the tab, as `$PITWALL_PANE` is for the CLI:
+its tab becomes the new tab's parent, and with `[agents] guard_workers`
+on, an agent it starts runs under the guard.
+
+`startId` is 16 hex digits the client picks, so a request it retries
+after a dropped connection, a timeout or a daemon handoff opens one tab:
+a retry of a tab that is open answers that tab, and one of a tab that
+closed since answers `closed: true`. The tab gets it as its id, so
+`@` and it addresses the tab. Without `startId` the daemon picks one.
+Successful start identities persist separately from the reopen archive,
+so pruning that archive cannot make a retry open another tab. The history
+holds at most 65,536 identities. At capacity, a new start drops one whose
+tab is neither open nor in the reopen archive. Keep the daemon's saved
+state to preserve this guarantee across restarts and handoffs.
+
+The guard follows the CLI: `guard`, or a preset with `guard = true`,
+starts the agent with `PITWALL_GUARD=1` once the daemon has checked
+that its hooks deny a `git push`. A start the guard cannot cover is
+`refused` with the reason and starts nothing.
+
+```json
+{"type": "newTab", "id": "c8", "session": "work", "dir": "/home/me/src/pitwall", "cmd": ["claude"], "name": "fix-login", "guard": true, "startId": "9f2c4e1a7b3d5c60"}
+```
+
+```json
+{"type": "result", "id": "c8", "ok": true, "data": {"tab": "9f2c4e1a7b3d5c60", "pane": "p7c1"}}
+```
+
+```json
+{"type": "result", "id": "c8", "ok": false, "code": "refused", "message": "guarded tab not started: no settings.json, so pitwall's hooks are not installed in /home/me/.claude; run CLAUDE_CONFIG_DIR=/home/me/.claude pitwall hooks install"}
+```
+
+### splitPane, tabNew and the guard
+
+`splitPane` opens a pane beside the active split's last pane of `tab`,
+or below it with `down`, running `cmd` or a shell. `tabNew` opens a
+shell tab after the tab of `pane`, as `pitwall tab new` run there does.
+
+A tab is guarded when one of its panes started with the guard. There a
+split gets `PITWALL_GUARD=1` and the same check as `newTab`, so a split
+of an agent the guard covers runs under it, and a split of a shell or
+another program is `refused`. `tabNew` from a guarded tab is `refused`,
+since its shell is out of the guard's reach.
+
+```json
+{"type": "splitPane", "id": "c9", "session": "work", "tab": "#1", "down": true, "cmd": ["make", "test"]}
+```
+
+```json
+{"type": "result", "id": "c9", "ok": true, "data": {"pane": "p8d2"}}
+```
+
+```json
+{"type": "tabNew", "id": "c10", "pane": "@p7c1"}
+```
+
+### sendPane and promptPane
+
+`sendPane` queues `text` for the pane's agent, as `pitwall send` does;
+the daemon types it once the agent sits at its prompt. `fromPane` is the
+sending agent's pane id, which the message's header names, and which
+may send one pane at most 20 messages until the user types there.
+JSON sends also hold at most 20 queued messages per pane across all
+connections, including sends without `fromPane`; further sends answer
+`busy` until the queue drains.
+
+`promptPane` waits for the agent's turn to end, then types `text`, as
+`pitwall prompt` does. Without `wait` it answers once it typed. With
+`wait` it answers once the turn the prompt started ends: `outcome`
+`reached` with `reply`, the turn's last message, or `blocked` with the
+agent's `question`. A blocked agent before the prompt answers `blocked`
+too, and nothing is typed. A pane that exits answers as `waitPane`
+does. A turn that has not started 30 seconds after the prompt answers
+`timeout`, as does the whole of it past `timeoutMs`. Pending prompts
+count toward the 64 waits a connection may have.
+
+```json
+{"type": "sendPane", "id": "c11", "pane": "@p7c1", "text": "the build is green", "fromPane": "p8d2"}
+```
+
+```json
+{"type": "promptPane", "id": "c12", "pane": "@p7c1", "text": "run the tests", "wait": true, "timeoutMs": 1800000}
+```
+
+```json
+{"type": "result", "id": "c12", "ok": true, "data": {"outcome": "reached", "state": "done", "reply": "All 214 tests pass."}}
+```
+
+### killTab, renameTab, detachTab and focusTab
+
+These do what `pitwall kill`, `rename` and `detach` do to `tab`.
+`killTab` asks nothing first: a pinned tab is `conflict`. `focusTab`
+brings a detached tab back and asks the windows showing its session to
+show it, as `pitwall attach` does without opening a window.
+
+```json
+{"type": "renameTab", "id": "c13", "session": "work", "tab": "#1", "title": "fix-login"}
+```
+
+```json
+{"type": "killTab", "id": "c14", "tab": "@9f2c4e1a7b3d5c60"}
+```
+
+```json
+{"type": "detachTab", "id": "c15", "tab": "@9f2c4e1a7b3d5c60"}
+```
+
+```json
+{"type": "focusTab", "id": "c16", "tab": "@9f2c4e1a7b3d5c60"}
+```
+
+```json
+{"type": "tabClose", "id": "c17", "pane": "@p8d2"}
+```
+
+### setStatus
+
+With `text`, `setStatus` sets the line under the row of the pane's tab;
+an empty or missing `text` clears it. With `state`, it reports the
+pane's program state instead, as `pitwall status <state>` run in the
+pane does, with `app`, `progress` (working or blocked only) and
+`message` ([Programs and scripts](agent-report.md#programs-and-scripts)). It stays until another report replaces or clears it, or the pane exits.
+
+```json
+{"type": "setStatus", "id": "c18", "pane": "@p8d2", "text": "deploying to staging"}
+```
+
+```json
+{"type": "setStatus", "id": "c19", "pane": "@p8d2", "state": "working", "app": "deploy", "progress": 40}
+```
+
+### worktreeNew
+
+`worktreeNew` opens a tab in a new worktree, `<repo>/.worktrees/<name>`,
+as `pitwall worktree new <name>` run in `repo` does: `repo` is an
+absolute path in the repository. `from`, `branch` and `pr` pick what it
+checks out, as `--from`, `--branch` and `--pr`; with none, a new branch
+`name` off the default branch. `cmd` runs in it, or a `preset`'s agent,
+or with `lane` (fleet mode) the lane's preset with the words of `cmd` as
+one brief; without them the tab opens empty. A lane whose workers start
+on another host is `remote`. `guard` and `parentPane` work as for
+`newTab`, and the tab joins the group of `parentPane`'s tab; without
+`parentPane` it joins the repository's group in `session`, which the
+daemon makes when missing.
+
+A worktree that opened but whose setup had a problem answers `ok` with
+the problem in `message`, as the CLI prints `#N` and then the problem.
+
+```json
+{"type": "worktreeNew", "id": "c20", "repo": "/home/me/src/pitwall", "name": "fix-login", "parentPane": "p7c1", "preset": "safe", "cmd": ["fix the login loop"]}
+```
+
+```json
+{"type": "result", "id": "c20", "ok": true, "data": {"tab": "5d0e8a2c9b1f7a34", "pane": "p9a3"}}
+```
+
+### queueAdd, queueList and queueDrop
+
+`queueAdd` queues `cmd`, or a `preset`'s agent with `cmd` after it, to
+start in `dir` once the session's queue has room, as `pitwall queue add`
+does with `--preset`, `--model`, `--at`, `--every` and `--worktree`.
+`dir` is an absolute path. `queueList` lists the session's queued tasks,
+first to start first, each with its `title` (its prompt's first line)
+but never its command line or environment. `queueDrop` takes `task` off
+the queue: an `id` from `queueList`, or its `n`, which needs `session`
+while more than one session is open.
+
+```json
+{"type": "queueAdd", "id": "c21", "session": "work", "dir": "/home/me/src/pitwall", "cmd": ["codex", "fix the flaky test"], "at": "02:00"}
+```
+
+```json
+{"type": "queueList", "id": "c22", "session": "work"}
+```
+
+```json
+{"type": "result", "id": "c22", "ok": true, "data": {"session": {"id": "4f1c2a9e", "name": "work"}, "tasks": [{"n": 1, "id": "7b2e", "title": "fix the flaky test", "dir": "/home/me/src/pitwall", "group": "pitwall", "worktree": "", "freshWorktree": false, "branch": "", "nextStart": "2026-11-16T02:00:00Z", "repeatMs": 0}]}}
+```
+
+```json
+{"type": "queueDrop", "id": "c23", "task": "7b2e"}
+```
+
+### hostCheck
+
+`hostCheck` answers what would stop a worker with these fields from
+starting on this machine: `cmd` or a `preset`'s agent on the daemon's
+`PATH`, its hooks and login, with `guard` the guard's check, and with
+`repo` a work tree whose origin git and `gh` can reach. It starts
+nothing. `dir` and `repo` are absolute or start with `~/`, the daemon's
+home folder. `clone` is origin's URL for the fix of a missing `repo`.
+Each problem has `what`, a `fix` and `warn`: with `warn` the worker
+would start without it. Raw git, SSH and `gh` error output is omitted, and
+credential patterns in the remaining messages are redacted. The whole
+check has a 30-second deadline, including git config reads and hook probes;
+cancelled subprocess pipes have at most one second to close.
+
+```json
+{"type": "hostCheck", "id": "c24", "cmd": ["claude"], "guard": true, "repo": "~/src/pitwall"}
+```
+
+```json
+{"type": "result", "id": "c24", "ok": true, "data": {"problems": [{"what": "claude is not on the daemon's PATH", "fix": "install it, or add its folder to the PATH pitwall's daemon starts with (docs/remote.md)", "warn": false}]}}
+```
+
+### adopt
+
+`adopt` makes `tab` the parent of orphans of its session, the tabs whose
+parent tab is gone, as `pitwall adopt` run in that tab does: those
+`ids` lists (from `listTabs` with `orphans`), or `all`. `all` skips
+`tab` itself and its own ancestors. A worker on another host is
+`remote`, and `all` while one is an orphan changes nothing; adopt those
+with the CLI. This daemon does not see the tabs of a session it no
+longer has on other hosts, which `pitwall adopt --all` also takes.
+
+```json
+{"type": "adopt", "id": "c25", "tab": "@9f2c4e1a7b3d5c60", "all": true}
+```
+
+```json
+{"type": "result", "id": "c25", "ok": true, "data": {"adopted": ["b9e0"]}}
+```
+
+`docs/examples` has two clients that list the tabs and read a pane:
+[`control.py`](examples/control.py) (Python, standard library) and
+[`control.sh`](examples/control.sh) (bash, `socat` and `jq`).
+
 <a id="results"></a>
 ## Results and errors
 
@@ -811,13 +1252,18 @@ person. The codes are the chat loop's ([errors](managed-sessions.md#driver)):
 
 | Code | Means |
 | --- | --- |
-| `not-found` | no such chat, request or turn |
-| `conflict` | someone answered first, the chat is archived, the tab is pinned |
-| `busy` | the chat cannot take this now, for example `rewind` while a turn runs |
+| `not-found` | no such chat, request, turn, session, tab or pane |
+| `conflict` | someone answered first, the chat is archived, the tab is pinned, a tab has that name; a control command the daemon refused, with its words |
+| `busy` | the chat cannot take this now, for example `rewind` while a turn runs; 64 `waitPane` already pending |
 | `unsupported` | this provider cannot, or this server does not know the command |
 | `provider` | the provider refused; `message` has its words |
 | `invalid` | the command is malformed: a missing field, a bad value, too many attachments |
 | `forge` | `gh` failed; `message` has its words |
+| `tooLarge` | the result is over 4 MiB, on the [local socket](#local-socket) |
+| `ambiguous` | a [control](#control) address or session matches more than one |
+| `remote` | a control address names a tab on another host, or a request would act on a worker or lane there |
+| `timeout` | a `waitPane` or `promptPane` passed its `timeoutMs`, or the prompted turn never started |
+| `refused` | the guard cannot cover a `newTab`, `worktreeNew`, `splitPane` or `tabNew`; nothing started |
 | `jev` | deprecated: this server never sends it |
 
 A client treats a code it does not know as a failure with `message` to

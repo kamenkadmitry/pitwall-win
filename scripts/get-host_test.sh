@@ -168,7 +168,7 @@ window() {
 }
 # why: only sh's own folder, so no pitwall of this machine is on the PATH.
 base=$(dirname -- "$(command -v sh)")
-if [ -e "$base/pitwall" ] || [ -e "$base/pitwall.exe" ]; then
+if [ -e "$base/pitwall" ] || [ -e "$base/pitwall.exe" ] || [ -e "$base/pitwall-core" ]; then
     printf 'skipped check_window: %s holds a pitwall, which would answer for the host\n' "$base" >&2
 else
     mine=$work/home/.local/bin/pitwall
@@ -179,10 +179,20 @@ else
     # The pitwall of another architecture, ahead of ~/.local/bin on the PATH.
     stub "$work/ahead/pitwall" 'echo "Exec format error" >&2; exit 126'
     window "$mine" "$work/ahead"
-    expect 'a pitwall that does not start ahead of the installed one' 1 "a window runs $work/ahead/pitwall, which is ahead of $mine"
+    expect 'a pitwall that does not start ahead of the installed one' 1 "a window runs $work/ahead/pitwall on this host, not $mine, and it does not start"
     stub "$work/ahead/pitwall" 'echo "pitwall v0.2.12"'
     window "$mine" "$work/ahead"
-    expect 'a pitwall that starts ahead of the installed one' 0 "A window runs $work/ahead/pitwall"
+    expect 'a pitwall that starts ahead of the installed one' 0 "A window runs $work/ahead/pitwall on this host"
+    rm "$work/ahead/pitwall"
+    # A window prefers a pitwall-core, wherever it looks, to any pitwall.
+    core=$work/home/.local/bin/pitwall-core
+    stub "$core" 'echo "pitwall-core v0.2.14"'
+    window "$mine"
+    expect 'a pitwall-core that starts next to the installed pitwall' 0 "A window runs $core on this host, not $mine"
+    stub "$core" 'echo "Exec format error" >&2; exit 126'
+    window "$mine"
+    expect 'a pitwall-core that does not start next to the installed pitwall' 1 "a window runs $core on this host, not $mine, and it does not start"
+    rm "$core"
     rm "$mine"
     stub "$work/elsewhere/pitwall" 'echo "pitwall v0.2.13"'
     window "$work/elsewhere/pitwall"
