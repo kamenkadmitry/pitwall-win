@@ -22,7 +22,7 @@ Without that key or the Android SDK/NDK, tagging still succeeds and prints
 the retry command, `sh scripts/apk-release.sh vX.Y.Z`. Either release step
 takes `--dry-run`.
 
-## Unreleased
+## v0.2.14-win.2
 
 - A Claude Code pane showing its list of sessions to resume, from `claude --resume` or `/resume`, no longer reads as waiting for an approval, and gets no "Install hooks for live status" notice while the list is up: Claude Code sends no hook until a session is picked, so pitwall took a pane left on the list for 20 seconds for an agent without hooks. The window also holds the notice back on such a pane of a host, whose own pitwall may still mark it.
 - `pitwall hooks install` replaces the hooks of a pitwall binary that is no longer there, such as a build that was moved, renamed or deleted: it kept them, since no pitwall owned them, so every agent event ran a missing program next to the new hook, and the status line stayed on it. Install now takes those hooks and that status line out of Claude Code, Codex, Gemini and Cursor configs and puts this pitwall's in; `pitwall hooks uninstall` takes them out too. Hooks of a pitwall that is still there, or of a program of another name, stay.
