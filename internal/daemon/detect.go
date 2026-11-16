@@ -182,10 +182,13 @@ func (d *Daemon) lookAt(ctx context.Context, l look) {
 	case prov != "":
 		s := screen
 		rule := trace.Rule
-		if s == "" && prev == model.StateWorking && !slices.Equal(det.cells, g.Cells) {
+		switch {
+		case rule == agent.SessionPickerRule:
+			// why: Done kept under the list of sessions to resume would let a finished worker close with the list open.
+		case s == "" && prev == model.StateWorking && !slices.Equal(det.cells, g.Cells):
 			rule = "screen-moving"
 			s = model.StateWorking // a reply streaming with the spinner hidden
-		} else if s == "" && (prev == model.StateWorking || prev == model.StateCompleted) {
+		case s == "" && (prev == model.StateWorking || prev == model.StateCompleted):
 			rule = "screen-still"
 			s = model.StateCompleted
 		}
