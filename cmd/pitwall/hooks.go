@@ -304,14 +304,21 @@ func hooks(args []string, out io.Writer, plans *[]hookPlan) error {
 			// A status line through a pitwall that is gone prints nothing:
 			// it comes out, and an install puts this pitwall's in its place,
 			// asked for or not, since the user had asked for one.
+			//
+			// why: a status line wraps the one it found, so those of two
+			// pitwalls that are gone nest, and only the outer one is named
+			// until it comes off: each round looks at what is left.
 			hadGone := false
-			for _, gone := range goneBins(bin, original) {
-				d, more, err := mergeStatusline(data, gone, false)
-				if err != nil {
-					return nil, nil, err
-				}
-				if len(more) > 0 {
-					data, changes, hadGone = d, append(changes, more...), true
+			for stripped := true; stripped; {
+				stripped = false
+				for _, gone := range goneBins(bin, data) {
+					d, more, err := mergeStatusline(data, gone, false)
+					if err != nil {
+						return nil, nil, err
+					}
+					if len(more) > 0 {
+						data, changes, hadGone, stripped = d, append(changes, more...), true, true
+					}
 				}
 			}
 			if install && !statusline && !hadGone {

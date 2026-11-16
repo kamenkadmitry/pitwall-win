@@ -958,3 +958,50 @@ func hookCmdPath(t *testing.T, bin string) string {
 	}
 	return path
 }
+
+// Status lines wrap the one they find, so those of two pitwalls that are
+// gone nest: the outer one names its binary, the inner one only shows once
+// the outer is off. Both come out, whichever the config lists first, and
+// the user's own command they wrapped is wrapped by this pitwall instead.
+func TestHooksNestedGoneStatusline(t *testing.T) {
+	home := hooksHome(t)
+	dir := t.TempDir()
+	inner, outer := filepath.Join(dir, "a", "pitwall"), filepath.Join(dir, "b", "pitwall-win.exe") // never made
+	data := []byte(`{"statusLine":{"type":"command","command":"my-line --short"}}`)
+	for _, bin := range []string{inner, outer} {
+		var err error
+		if data, _, err = mergeStatusline(data, bin, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The inner pitwall left hooks too, so the config names it before the
+	// status line does.
+	data, _, err := mergeHooks(data, agent.ClaudeHooks(inner), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoted := func(s string) string { return strings.Trim(strconv.Quote(s), `"`) }
+	for _, bin := range []string{inner, outer} {
+		if !bytes.Contains(data, []byte(quoted(hookCmdPath(t, bin)+" statusline"))) {
+			t.Fatalf("the fixture has no status line of %s:\n%s", bin, data)
+		}
+	}
+	claude := filepath.Join(home, ".claude", "settings.json")
+	writeHooksTestFile(t, claude, string(data))
+	var out bytes.Buffer
+	if err := runHooks([]string{"install"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	got := string(readHooksTestFile(t, claude))
+	for _, bin := range []string{inner, outer} {
+		if strings.Contains(got, quoted(hookCmdPath(t, bin))) {
+			t.Errorf("settings.json still names the gone %s:\n%s", bin, got)
+		}
+	}
+	root, _ := hookJSON[hookObject]([]byte(got))
+	line, _ := hookJSON[hookObject](root["statusLine"])
+	command, _ := hookJSON[string](line["command"])
+	if wrapped, ours := agent.StatuslineWrapped(testBin, command); !ours || wrapped != "my-line --short" {
+		t.Errorf("the status line is %q: this pitwall's around my-line --short is wanted", command)
+	}
+}
