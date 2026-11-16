@@ -514,5 +514,5 @@ func (p *Page) hostPopover(gtx gl.Context, w, top int) {
 	cl.Pop()
 	lo.Pop()
 	o.Pop()
-	m.Stop().Add(gtx.Ops)
+	op.Defer(gtx.Ops, m.Stop())
 }
