@@ -9,12 +9,12 @@ import (
 
 func TestCleanSSHDest(t *testing.T) {
 	for in, want := range map[string]string{
-		"box":              "box",
-		"  me@10.0.0.2  ":  "me@10.0.0.2",
-		"ssh box":          "box",
-		"ssh ssh box":      "box", // paste of a pasted command
-		"ssh -p 22 box":    "-p 22 box",
-		"":                 "",
+		"box":                "box",
+		"  me@10.0.0.2  ":    "me@10.0.0.2",
+		"ssh box":            "box",
+		"ssh ssh box":        "box", // paste of a pasted command
+		"ssh -p 22 box":      "-p 22 box",
+		"":                   "",
 		"  ssh  alter-core ": "alter-core",
 	} {
 		if got := cleanSSHDest(in); got != want {
