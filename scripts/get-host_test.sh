@@ -134,6 +134,28 @@ expect 'a library still missing after apt-get stops the install' 1 "the host sti
 libs 0 'libnope.so.9'
 expect 'a library without a package stops the install' 1 'libnope.so.9, and this script knows no package for it' ''
 
+# put runs place on the release binary $1 into $work/dest.
+put() {
+    rc=0
+    out=$(place "$1" "$work/dest" 2>&1) || rc=$?
+}
+stub "$work/good" 'echo "pitwall v0.2.13"'
+# A release that cannot run here, as a glibc binary on a host with musl.
+stub "$work/bad" 'echo "not found" >&2; exit 127'
+put "$work/good"
+expect 'a release that starts is put in place' 0 'pitwall v0.2.13'
+if [ "$("$work/dest/pitwall" --version)" != 'pitwall v0.2.13' ] || [ -e "$work/dest/.pitwall.new" ]; then
+    printf 'a release that starts: %s\n' "$(ls -A "$work/dest")" >&2
+    fail=1
+fi
+stub "$work/dest/pitwall" 'echo "pitwall v0.2.12"'
+put "$work/bad"
+expect 'a release that does not start is not installed' 1 'does not start on this host, so nothing was installed: not found'
+if [ "$("$work/dest/pitwall" --version)" != 'pitwall v0.2.12' ] || [ -e "$work/dest/.pitwall.new" ]; then
+    printf 'a release that does not start replaced the old pitwall or left its file: %s\n' "$(ls -A "$work/dest")" >&2
+    fail=1
+fi
+
 # window runs check_window on the pitwall at $1 with the folder $2, when
 # given, first on the PATH and $work/home as the home folder.
 window() {

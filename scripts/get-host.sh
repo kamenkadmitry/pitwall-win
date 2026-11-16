@@ -79,7 +79,9 @@ install_libs() {
         printf '%s\n' 'pitwall: no ldd on this host, so the libraries pitwall needs cannot be checked' >&2
         exit 1
     fi
-    libs=$(ldd "$1" | missing_libs | tr '\n' ' ')
+    # why: an ldd of another C library, as musl's, only complains about a
+    # glibc binary; place then finds that the release does not start here.
+    libs=$(ldd "$1" 2>/dev/null | missing_libs | tr '\n' ' ')
     libs=${libs% }
     if [ -z "$libs" ]; then
         return 0
@@ -106,11 +108,30 @@ install_libs() {
         printf 'pitwall: apt-get did not install %s. If it found no such package, run sudo apt-get update on the host, then install again.\n' "$pkgs" >&2
         exit 1
     fi
-    left=$(ldd "$1" | missing_libs | tr '\n' ' ')
+    left=$(ldd "$1" 2>/dev/null | missing_libs | tr '\n' ' ')
     if [ -n "$left" ]; then
         printf 'pitwall: apt-get installed %s, and the host still lacks %s\n' "$pkgs" "$left" >&2
         exit 1
     fi
+}
+
+# place puts the pitwall at $1 into folder $2 as pitwall and prints what its
+# --version says. It runs the new file before the rename: a release that
+# does not start on this host, as on one without glibc, then replaces no
+# pitwall that does and leaves nothing behind. get.sh reports such an
+# install as done.
+place() {
+    mkdir -p "$2"
+    cp "$1" "$2/.pitwall.new"
+    chmod 755 "$2/.pitwall.new"
+    if ! said=$("$2/.pitwall.new" --version 2>&1); then
+        rm -f "$2/.pitwall.new"
+        printf 'pitwall: this release does not start on this host, so nothing was installed: %s\n' "$said" >&2
+        return 1
+    fi
+    # why: a rename leaves a running pitwall on its old binary.
+    mv -f "$2/.pitwall.new" "$2/pitwall"
+    printf '%s\n' "$said"
 }
 
 # window_pitwall prints the pitwall a window's remote-start runs on this
@@ -181,16 +202,7 @@ main() {
     fi
     tar -xzf "$tmp/$name" -C "$tmp"
     install_libs "$tmp/pitwall"
-    mkdir -p "$dir"
-    # why: a rename leaves a running pitwall on its old binary.
-    cp "$tmp/pitwall" "$dir/.pitwall.new"
-    chmod 755 "$dir/.pitwall.new"
-    mv -f "$dir/.pitwall.new" "$dir/pitwall"
-    # why: a pitwall that does not start is no install; get.sh reports one.
-    if ! said=$("$dir/pitwall" --version 2>&1); then
-        printf 'pitwall: installed %s, and it does not start: %s\n' "$dir/pitwall" "$said" >&2
-        exit 1
-    fi
+    said=$(place "$tmp/pitwall" "$dir") || exit 1
     printf 'Installed %s in %s.\n' "$said" "$dir"
     check_window "$dir/pitwall" || exit 1
     printf 'For agent status in the sidebar, run on the host: %s hooks install\n' "$dir/pitwall"
