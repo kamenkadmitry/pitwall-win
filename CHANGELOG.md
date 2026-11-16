@@ -24,6 +24,9 @@ takes `--dry-run`.
 
 ## Unreleased
 
+- `scripts/get.ps1` checks the environment before installing: the cmdlets it needs, the arch, a writable install dir, a writable user PATH, and that github.com answers — each check prints, and any failure stops the install. A progress bar tracks the stages.
+- Install on a host from Settings, Hosts first checks the remote has `curl`, `sh` and `tar`, naming the missing tool.
+- CI no longer runs the linux or macOS legs; their still-useful checks (gofmt, the script tests, both release arches, the vendored module) moved into the Windows leg.
 - The host picker's dropdown paints after the frame, so the form's later rows no longer draw over its list.
 - The host editor on Settings, Hosts offers a filterable dropdown of the machine names ssh already knows from `~/.ssh/config`, previews the `[[hosts]]` table it will write, and checks the connection over ssh: whether the host answers and has pitwall on its PATH. When it does not, an Install button runs `get.sh --core` there; Save activates only after a green check. A new host's "in every window" switch defaults on, a pasted `ssh ` prefix in the ssh field is dropped, and the field's help now says the destination only.
 
