@@ -98,6 +98,12 @@ jobs:
           go -C third_party/x-vt vet ./...
           go -C third_party/x-vt test -timeout 5m ./...
       - name: Scripts
+        # why: get_test.sh makes links to files that are not there, as get.sh
+        # does for pitwall-core. Git Bash's ln -s copies its target unless
+        # told otherwise, and has nothing to copy; this mode writes a link
+        # file instead, and needs no privilege.
+        env:
+          MSYS: winsymlinks:sysfile
         run: |
           sh -n scripts/install.sh
           sh -n scripts/get.sh
