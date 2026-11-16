@@ -38,6 +38,7 @@ agent status next to split terminal panes. Sessions survive the window closing
 | `internal/ui/mdview`   | The markdown reader: parse, flowcharts, images, its overlay    |
 | `internal/ui/app`      | Window, splits, Alt navigation, switcher                       |
 | `cmd/pitwall`          | Entry point (orchestrator only)                                |
+| `scripts`              | `get-host.sh`, the host installer the binary embeds            |
 
 Exported signatures in each package are the contract other packages build
 against. Implement them as written; if one is wrong, say so in your report

@@ -99,8 +99,8 @@ func TestRemoteErrors(t *testing.T) {
 	prev := version
 	t.Cleanup(func() { version = prev })
 	r := &sshHost{name: "box", dest: "me@box"}
-	release := "ssh me@box 'curl -fsSL https://raw.githubusercontent.com/quanticstudios/pitwall/main/scripts/get.sh | PITWALL_VERSION=v0.1.0-alpha.30 sh'"
-	latest := "ssh me@box 'curl -fsSL https://raw.githubusercontent.com/quanticstudios/pitwall/main/scripts/get.sh | sh'"
+	release := "ssh me@box 'curl -fsSL https://raw.githubusercontent.com/kamenkadmitry/pitwall-win/main/scripts/get-host.sh | PITWALL_VERSION=v0.1.0-alpha.30 sh'"
+	latest := "ssh me@box 'curl -fsSL https://raw.githubusercontent.com/kamenkadmitry/pitwall-win/main/scripts/get-host.sh | sh'"
 	started := func(v int) func() error {
 		return func() error {
 			_, err := r.parseStart(fmt.Sprintf("Welcome to box\n%s\t%d\t0\tv0.1.0-alpha.9\t/run/user/1000/pitwall/pitwall.sock\n", remoteMark, v))
@@ -126,6 +126,13 @@ func TestRemoteErrors(t *testing.T) {
 		{"v0.1.0-alpha.30", started(proto.Version - 1), fmt.Sprintf("pitwall v0.1.0-alpha.9 on box speaks protocol version %d and this pitwall v0.1.0-alpha.30 speaks %d. Install a matching pitwall there with:\n  %s", proto.Version-1, proto.Version, release)},
 		{"v0.1.0-alpha.30", started(proto.Version + 1), fmt.Sprintf("pitwall v0.1.0-alpha.9 on box speaks protocol version %d and this pitwall v0.1.0-alpha.30 speaks %d. Update this pitwall, or install a matching one there with:\n  %s", proto.Version+1, proto.Version, release)},
 		{"v0.1.0-alpha.30", func() error { _, err := r.parseStart("motd\n"); return err }, `pitwall on box did not report its socket; it printed "motd\n"`},
+		// Upstream has no release named after this repo's -win.N tags, nor
+		// after a git describe string: the hint pins what get.sh can fetch.
+		{"v0.2.13-win.1", func() error { return r.sshError("sh: 1: exec: pitwall: not found\n", exit(127)) },
+			"pitwall is not installed on box: it is not on the PATH there or in ~/.local/bin. Install it with:\n  " +
+				"ssh me@box 'curl -fsSL https://raw.githubusercontent.com/kamenkadmitry/pitwall-win/main/scripts/get-host.sh | PITWALL_VERSION=v0.2.13 sh'"},
+		{"v0.2.13-win.1-3-g0123abc", func() error { return r.sshError("sh: 1: exec: pitwall: not found\n", exit(127)) },
+			"pitwall is not installed on box: it is not on the PATH there or in ~/.local/bin. Install it with:\n  " + latest},
 	} {
 		version = c.version
 		if got := fmt.Sprint(c.err()); got != c.want {

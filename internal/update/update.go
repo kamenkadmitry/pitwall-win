@@ -61,6 +61,25 @@ func Newer(tag, current string) bool {
 	return a != nil && b != nil && compare(a[1:], b[1:]) > 0
 }
 
+// winRe matches this repo's own release tags: an upstream release and the
+// number of the Windows build made from it, as in v0.2.13-win.1.
+var winRe = regexp.MustCompile(`^(v\d+\.\d+\.\d+)-win\.\d+$`)
+
+// HostRelease is the upstream release get.sh installs on a host to match
+// this pitwall of version current: the release a -win.N build was made
+// from, since upstream has no release of that name, else current when it
+// is a release tag. "" means current is no release, and the host takes the
+// latest.
+func HostRelease(current string) string {
+	if m := winRe.FindStringSubmatch(current); m != nil {
+		return m[1]
+	}
+	if releaseRe.MatchString(current) {
+		return current
+	}
+	return ""
+}
+
 // compare orders [major, minor, patch, prerelease].
 func compare(a, b []string) int {
 	for i := range 3 {

@@ -18,6 +18,27 @@ import (
 	"testing"
 )
 
+// A host installs the upstream release this build was made from: upstream
+// has no release named after a -win.N tag.
+func TestHostRelease(t *testing.T) {
+	for cur, want := range map[string]string{
+		"v0.2.13-win.1":             "v0.2.13",
+		"v0.2.13-win.12":            "v0.2.13",
+		"v0.2.13":                   "v0.2.13",
+		"v0.1.0-alpha.30":           "v0.1.0-alpha.30",
+		"v0.2.13-win.1-12-gc5d6569": "",
+		"v0.2.13-win.1-dirty":       "",
+		"v0.2.13-3-g0123abc":        "",
+		"dev-0123456789ab":          "",
+		"dev":                       "",
+		"":                          "",
+	} {
+		if got := HostRelease(cur); got != want {
+			t.Errorf("HostRelease(%q) = %q, want %q", cur, got, want)
+		}
+	}
+}
+
 func TestNewer(t *testing.T) {
 	for _, c := range []struct {
 		tag, cur string

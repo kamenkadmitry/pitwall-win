@@ -23,6 +23,7 @@ import (
 	"github.com/quanticstudios/pitwall/internal/nowindow"
 	"github.com/quanticstudios/pitwall/internal/proto"
 	"github.com/quanticstudios/pitwall/internal/ui/app"
+	"github.com/quanticstudios/pitwall/internal/update"
 )
 
 // guiDial is how a window connects and reconnects: dialOrStart, or a
@@ -37,7 +38,10 @@ var hostArgs []string
 // proto.Version, proto.Level, the version and the socket, tab-separated.
 const remoteMark = "pitwall-remote"
 
-const getScript = "https://raw.githubusercontent.com/quanticstudios/pitwall/main/scripts/get.sh"
+// getScript installs pitwall on a host with the libraries it links.
+// why: upstream's get.sh installs a pitwall that does not start on a host
+// without the window's libraries, and exits 0.
+const getScript = "https://raw.githubusercontent.com/kamenkadmitry/pitwall-win/main/scripts/get-host.sh"
 
 // parseHost reads pitwall --host's arguments: <host> [-s <session>].
 func parseHost(args []string) (host, session string, ok bool) {
@@ -329,12 +333,12 @@ func (r *sshHost) sshError(stderr string, err error) error {
 	return fmt.Errorf("pitwall on %s failed: %s", r.name, msg)
 }
 
-// install is the command that installs pitwall on the host: this release
-// when this pitwall is one, else the latest.
+// install is the command that installs pitwall on the host: the upstream
+// release this pitwall was made from when it is a release, else the latest.
 func (r *sshHost) install() string {
 	pin := ""
-	if strings.HasPrefix(version, "v") {
-		pin = "PITWALL_VERSION=" + version + " "
+	if v := update.HostRelease(version); v != "" {
+		pin = "PITWALL_VERSION=" + v + " "
 	}
 	return fmt.Sprintf("ssh %s 'curl -fsSL %s | %ssh'", r.dest, getScript, pin)
 }
