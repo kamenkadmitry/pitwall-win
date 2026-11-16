@@ -827,7 +827,12 @@ var skillReleased = []string{
 
 // IsSkill reports whether b is what Skill returns, now or in an earlier
 // release: a file pitwall wrote and nobody edited since.
+//
+// why: a pitwall built from a Windows checkout with CRLF line ends once
+// wrote the skill with them; that copy is as unedited as the LF one, and
+// read as edited it was never refreshed again.
 func IsSkill(b []byte) bool {
+	b = bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
 	sum := sha256.Sum256(b)
 	return string(b) == skill || slices.Contains(skillReleased, hex.EncodeToString(sum[:]))
 }

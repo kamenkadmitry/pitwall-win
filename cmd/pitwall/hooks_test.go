@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -850,5 +851,157 @@ func TestCommandBin(t *testing.T) {
 		if got := commandBin(cmd); got != want {
 			t.Errorf("commandBin(%q) = %q, want %q", cmd, got, want)
 		}
+	}
+}
+
+// Hooks pitwall wrote for a binary that is no longer there, as a build in
+// a checkout that was since moved or deleted, can only fail, and no
+// pitwall is left to uninstall them. An install replaces them with this
+// pitwall's, status line included; an uninstall takes them out. Hooks of
+// a pitwall that is still there, or of another program, stay.
+func TestHooksReplaceGoneBinary(t *testing.T) {
+	home := hooksHome(t)
+	gone := filepath.Join(t.TempDir(), "checkout", "pitwall-win.exe") // never made
+	goneCmd := hookCmdPath(t, gone)
+	there := filepath.Join(t.TempDir(), "pitwall")
+	if err := os.WriteFile(there, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	thereCmd := hookCmdPath(t, there)
+	tool := filepath.Join(t.TempDir(), "gone-too", "other-tool") // not pitwall's name
+
+	// settings.json as the gone pitwall left it, with its status line, plus
+	// a hook of a pitwall that is still there and one of another program.
+	withGone, _, err := mergeHooks([]byte(`{"model":"keep"}`), agent.ClaudeHooks(gone), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withGone, _, err = mergeStatusline(withGone, gone, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withGone, _, err = mergeHooks(withGone, agent.ClaudeHooks(there), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolHooks := []byte(`{"Stop":[{"hooks":[{"type":"command","command":` + strconv.Quote(hookCmdPath(t, tool)+" hook claude") + `}]}]}`)
+	withGone, _, err = mergeHooks(withGone, toolHooks, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := bytes.Count(withGone, []byte(strings.Trim(strconv.Quote(goneCmd), `"`))); n != 11 {
+		t.Fatalf("the fixture names the gone pitwall %d times, want 10 hooks and a status line", n)
+	}
+	claude := filepath.Join(home, ".claude", "settings.json")
+	codex := filepath.Join(home, ".codex", "hooks.json")
+	writeHooksTestFile(t, claude, string(withGone))
+	codexGone, _, err := mergeHooks(nil, agent.CodexHooks(gone), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeHooksTestFile(t, codex, string(codexGone))
+
+	var out bytes.Buffer
+	if err := runHooks([]string{"install"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"removed Stop: " + goneCmd + " hook claude", "added Stop: " + testCmd + " hook claude", "removed Stop: " + goneCmd + " hook codex"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("install did not report %q:\n%s", want, out.String())
+		}
+	}
+	quoted := func(s string) string { return strings.Trim(strconv.Quote(s), `"`) }
+	got := string(readHooksTestFile(t, claude))
+	if strings.Contains(got, quoted(goneCmd)) {
+		t.Errorf("settings.json still names the gone pitwall:\n%s", got)
+	}
+	for what, want := range map[string]string{
+		"this pitwall's hooks":               quoted(testCmd + " hook claude"),
+		"this pitwall's status line":         quoted(agent.ClaudeStatusline(testBin, "")),
+		"the hooks of a pitwall still there": quoted(thereCmd + " hook claude"),
+		"the hook of another program":        quoted(hookCmdPath(t, tool) + " hook claude"),
+		"unrelated settings":                 `"model": "keep"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("settings.json lost %s (%s):\n%s", what, want, got)
+		}
+	}
+	if got := string(readHooksTestFile(t, codex)); strings.Contains(got, quoted(goneCmd)) || !strings.Contains(got, quoted(testCmd+" hook codex")) {
+		t.Errorf("codex hooks.json after install:\n%s", got)
+	}
+
+	// An uninstall takes a gone pitwall's hooks and status line out too.
+	writeHooksTestFile(t, claude, string(withGone))
+	out.Reset()
+	if err := runHooks([]string{"uninstall"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	got = string(readHooksTestFile(t, claude))
+	if strings.Contains(got, quoted(goneCmd)) || !strings.Contains(got, quoted(thereCmd+" hook claude")) || !strings.Contains(got, quoted(hookCmdPath(t, tool)+" hook claude")) {
+		t.Errorf("settings.json after uninstall:\n%s", got)
+	}
+}
+
+// hookCmdPath is bin as pitwall writes it at the start of a hook command.
+func hookCmdPath(t *testing.T, bin string) string {
+	t.Helper()
+	events, _ := hookJSON[hookObject](agent.ClaudeHooks(bin))
+	groups, _ := hookJSON[[]hookObject](events["Stop"])
+	if len(groups) == 0 {
+		t.Fatal("ClaudeHooks has no Stop hook")
+	}
+	handlers, _ := hookJSON[[]hookObject](groups[0]["hooks"])
+	command, _ := hookJSON[string](handlers[0]["command"])
+	path, ok := strings.CutSuffix(command, " hook claude")
+	if !ok {
+		t.Fatalf("a Claude hook command is %q", command)
+	}
+	return path
+}
+
+// Status lines wrap the one they find, so those of two pitwalls that are
+// gone nest: the outer one names its binary, the inner one only shows once
+// the outer is off. Both come out, whichever the config lists first, and
+// the user's own command they wrapped is wrapped by this pitwall instead.
+func TestHooksNestedGoneStatusline(t *testing.T) {
+	home := hooksHome(t)
+	dir := t.TempDir()
+	inner, outer := filepath.Join(dir, "a", "pitwall"), filepath.Join(dir, "b", "pitwall-win.exe") // never made
+	data := []byte(`{"statusLine":{"type":"command","command":"my-line --short"}}`)
+	for _, bin := range []string{inner, outer} {
+		var err error
+		if data, _, err = mergeStatusline(data, bin, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The inner pitwall left hooks too, so the config names it before the
+	// status line does.
+	data, _, err := mergeHooks(data, agent.ClaudeHooks(inner), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoted := func(s string) string { return strings.Trim(strconv.Quote(s), `"`) }
+	for _, bin := range []string{inner, outer} {
+		if !bytes.Contains(data, []byte(quoted(hookCmdPath(t, bin)+" statusline"))) {
+			t.Fatalf("the fixture has no status line of %s:\n%s", bin, data)
+		}
+	}
+	claude := filepath.Join(home, ".claude", "settings.json")
+	writeHooksTestFile(t, claude, string(data))
+	var out bytes.Buffer
+	if err := runHooks([]string{"install"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	got := string(readHooksTestFile(t, claude))
+	for _, bin := range []string{inner, outer} {
+		if strings.Contains(got, quoted(hookCmdPath(t, bin))) {
+			t.Errorf("settings.json still names the gone %s:\n%s", bin, got)
+		}
+	}
+	root, _ := hookJSON[hookObject]([]byte(got))
+	line, _ := hookJSON[hookObject](root["statusLine"])
+	command, _ := hookJSON[string](line["command"])
+	if wrapped, ours := agent.StatuslineWrapped(testBin, command); !ours || wrapped != "my-line --short" {
+		t.Errorf("the status line is %q: this pitwall's around my-line --short is wanted", command)
 	}
 }

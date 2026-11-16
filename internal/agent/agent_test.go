@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -808,5 +809,20 @@ func TestSkillReleasedCoversTags(t *testing.T) {
 		if err == nil && !IsSkill(b) {
 			t.Errorf("%s's skill is not in skillReleased", tag)
 		}
+	}
+}
+
+// A skill pitwall wrote with CRLF line ends, as a build from a Windows
+// checkout once did, is as unedited as the LF one; an edited copy is not.
+func TestIsSkillCRLF(t *testing.T) {
+	crlf := bytes.ReplaceAll(Skill(), []byte("\n"), []byte("\r\n"))
+	if bytes.Equal(crlf, Skill()) {
+		t.Fatal("the skill has no line ends to turn")
+	}
+	if !IsSkill(Skill()) || !IsSkill(crlf) {
+		t.Fatalf("IsSkill: LF %v, CRLF %v, want both", IsSkill(Skill()), IsSkill(crlf))
+	}
+	if IsSkill(append(crlf, []byte("my note\r\n")...)) || IsSkill(append(Skill(), []byte("my note\n")...)) {
+		t.Fatal("an edited skill reads as unedited")
 	}
 }
