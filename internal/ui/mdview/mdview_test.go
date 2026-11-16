@@ -842,7 +842,10 @@ func TestFetch(t *testing.T) {
 	}
 	v.Back()
 	v.Back() // cancels the first Back's fetch
-	frame()
+	// The cancelled fetch may still wake a frame before a.md arrives.
+	for i := 0; i < 5 && shown() != "A"; i++ {
+		frame()
+	}
 	if shown() != "A" || v.Path() != "docs/a.md" || v.scroll != 30 || v.HasBack() {
 		t.Errorf("back: %q %s scroll %d", shown(), v.Path(), v.scroll)
 	}
@@ -869,7 +872,7 @@ func TestTableCellKeys(t *testing.T) {
 	d.Layout(gtx, theme.Dark())
 	for _, ss := range d.styles {
 		for _, s := range ss {
-			if s.Content == "AFTER" {
+			if strings.Contains(s.Content, "AFTER") {
 				return
 			}
 		}

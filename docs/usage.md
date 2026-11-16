@@ -271,10 +271,13 @@ A working agent whose screen has not changed for 20 minutes shows
 agent can hang mid-turn, and Gemini CLI never reports a failed turn, so
 Working alone does not mean busy. If a hooked Claude Code or Codex turn
 shows its input box without a form or busy indicator for that whole interval,
-pitwall marks it Done even if its Stop hook never arrives. A Stop hook that
-reports a running background task, such as a shell command, a
-monitor or a subagent, keeps Working until the main session resumes work
-or reports completion. Work hooks restart the interval; idle reminders and slash commands do not. Set the minutes with
+pitwall marks it Done even if its Stop hook never arrives. A Claude Code
+Stop hook that reports a running shell command from Bash or the Monitor
+tool, an MCP monitor or task, a subagent or a workflow keeps Working, with the turn's last
+reply on the card, until the main session resumes work, reports completion,
+or a later SubagentStop lists none of those still running. Claude Code's own
+background work, such as auto-mode scans, dreams, memory imports, teammates
+and cloud sessions, and task types pitwall does not know never keep Working. Work hooks restart the interval; idle reminders and slash commands do not. Set the minutes with
 `quiet_after` under `[agents]` in `config.toml`, or **Quiet after** in
 Settings; 0 turns it off. With `continue_when_quiet = true` (**Continue when quiet**), pitwall
 also types `continue` and Enter into a quiet agent, once. It does so only
@@ -2380,6 +2383,12 @@ with the fix, unless that agent's guard is installed in the config folder
 it reads. For Claude Code and Codex that is `CLAUDE_CONFIG_DIR` or
 `CODEX_HOME` as the tab, its preset or its profile sets it, else
 `~/.claude` or `~/.codex`.
+Before every guarded start, the daemon also runs the pitwall the hook
+names as `pitwall guard` on `git push origin main`, which every guard
+denies, and starts the tab only when it exits 2 within 3 seconds. A
+binary that cannot start on that machine, such as a desktop build on a
+server without its graphics libraries, refuses the tab with the reason.
+`pitwall doctor` and the host check run the same test.
 For a profile's folder, run `CLAUDE_CONFIG_DIR=<folder> pitwall hooks
 install` (or `CODEX_HOME=`). This holds for a resume after a restart and
 for a worker the fleet's big lane replaces, which keeps the guard of the
@@ -2390,14 +2399,22 @@ launches refuse `--bare`, `--safe-mode`, `--settings`,
 `--setting-sources` without `user`, and `CLAUDE_CODE_SIMPLE`: those can
 skip or override the user hooks that pitwall checks. Remove those options
 to use the guard. `pitwall doctor` shows a guard line per agent. Codex
-also needs `/hooks` once to trust the hooks, which pitwall cannot check.
+also needs `/hooks` once to trust the hooks, which pitwall cannot check. Claude Code and Codex
+decide for themselves what a hook that cannot run means, and both let the
+tool run, so a pitwall that breaks after a guarded tab started goes
+unnoticed there until the next guarded start tests it.
 
 pi and omp use `PI_CODING_AGENT_DIR`, else `~/.pi/agent` and
 `~/.omp/agent`. pitwall installs and checks OpenCode's plugin in
 `OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode` or
 `~/.config/opencode`. Their current,
-unedited extension or plugin must be present and name an existing
-pitwall executable. Older copies that predate the guard do not count;
+unedited extension or plugin must be present and name a pitwall that
+passes the same test. When that pitwall cannot answer later, because it
+was removed, exits with another status than 0 or 2, is killed or takes
+over 5 seconds, the extension or plugin denies the command with
+`pitwall guard could not check this command (<why>); denied because the
+tab is guarded`. Copies from v0.2.13 and earlier allowed the command
+there, and copies that predate the guard have none, so neither counts;
 run `pitwall hooks install` with the same directory override to update
 them. pi and omp launches with `--no-extensions` are refused.
 
@@ -2561,7 +2578,8 @@ quarter of the time when that is shorter. It never parks:
 - a pane a window shows, the focused one included
 - an agent asking for approval, a question or a plan, or showing a form
 - a running turn, which covers a guarded tab's command in progress
-- a turn whose Stop hook reports a running background task
+- a turn whose Stop hook reports a running background task that wakes the
+  agent, as [Watching agents](#watching-agents) lists
 - a pane with work of its own still running besides the agent and its
   stdio MCP servers: a background tool's shell, a dev server, a watcher,
   or a `cmd &` that outlived the shell that started it. A stdio server is a

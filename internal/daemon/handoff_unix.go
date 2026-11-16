@@ -29,8 +29,8 @@ type pausable interface {
 
 // serveHandoff is the old daemon's side. Any failure before the new daemon
 // starts leaves this one serving as before.
-func (d *Daemon) serveHandoff(nc net.Conn, conn *proto.Conn) {
-	if err := d.handOff(nc, conn); err != nil {
+func (d *Daemon) serveHandoff(nc net.Conn, conn *proto.Conn, level int) {
+	if err := d.handOff(nc, conn, level); err != nil {
 		log.Printf("handoff: %q; still serving", err)
 		conn.Send(handoffAbort{Reason: err.Error()}) // the new daemon may be gone
 		// why: closing first would fail the new daemon's next write with
@@ -44,7 +44,7 @@ func (d *Daemon) serveHandoff(nc net.Conn, conn *proto.Conn) {
 	log.Printf("handoff: the new daemon took over")
 }
 
-func (d *Daemon) handOff(nc net.Conn, conn *proto.Conn) error {
+func (d *Daemon) handOff(nc net.Conn, conn *proto.Conn, level int) error {
 	uc, _ := nc.(*net.UnixConn)
 	d.mu.Lock()
 	ln, _ := d.ln.(*net.UnixListener)
@@ -60,6 +60,13 @@ func (d *Daemon) handOff(nc net.Conn, conn *proto.Conn) error {
 	if r, ok := m.(handoffRequest); !ok || r.Version != handoffVersion {
 		return fmt.Errorf("handoff request %#v, want version %d", m, handoffVersion)
 	}
+	if unit, user := supervised(); unit != "" {
+		systemctl := "systemctl"
+		if user {
+			systemctl += " --user"
+		}
+		return fmt.Errorf("this daemon runs as the systemd unit %s; a handoff would leave its panes in a unit that stops. Run %s restart %s (agents resume, other programs stop)", unit, systemctl, unit)
+	}
 	// why: d.mu stays held until the end, so no request, exit or timer
 	// changes state or panes after they were sent.
 	d.sendMu.Lock()
@@ -70,6 +77,9 @@ func (d *Daemon) handOff(nc net.Conn, conn *proto.Conn) error {
 	defer d.mu.Unlock()
 	if d.closing {
 		return errors.New("shutting down")
+	}
+	if len(d.st.Starts) > 0 && level < proto.StartHistoryLevel {
+		return fmt.Errorf("the new daemon needs protocol level %d to retain start ids; keeping this daemon running", proto.StartHistoryLevel)
 	}
 	log.Printf("handoff: freezing %d panes", len(d.st.Panes))
 	f := &frozen{ln: ln}
@@ -362,7 +372,7 @@ type arrival struct {
 }
 
 func takeover(uc *net.UnixConn, conn *proto.Conn, o Options) (*Daemon, *net.UnixListener, error) {
-	if err := conn.Send(proto.Hello{Version: proto.Version, Kind: "handoff"}); err != nil {
+	if err := conn.Send(proto.Hello{Version: proto.Version, Level: proto.Level, Kind: "handoff"}); err != nil {
 		return nil, nil, err
 	}
 	if err := conn.Send(handoffRequest{Version: handoffVersion}); err != nil {

@@ -158,18 +158,50 @@ func Check(ctx context.Context, c *http.Client, url, current string) (Release, b
 	return rel, Newer(rel.Tag, current), nil
 }
 
-// Install downloads rel's archive for this platform, checks it against the
-// release's checksums.txt, and replaces exe (through symlinks) with the
-// pitwall binary inside. On any error exe is left as it was.
-func Install(ctx context.Context, c *http.Client, rel Release, exe string) error {
-	return install(ctx, c, rel, exe, runtime.GOOS, runtime.GOARCH)
+// Tagged is release tag on the releases page that latest, a URL ending in
+// /releases/latest such as LatestURL, belongs to. It makes no request: a
+// tag that was never released fails in Install, before any write. tag must
+// be a release tag, so it cannot change the URL's path.
+func Tagged(latest, tag string) (Release, error) {
+	if releaseRe.FindStringSubmatch(tag) == nil {
+		return Release{}, fmt.Errorf("%q is not a release tag such as v0.2.13", tag)
+	}
+	base, ok := strings.CutSuffix(latest, "/latest")
+	if !ok {
+		return Release{}, fmt.Errorf("%s does not end in /latest", latest)
+	}
+	return Release{Tag: tag, Base: base + "/download/" + tag + "/"}, nil
+}
+
+// Install downloads rel's archive of bin, "pitwall" or "pitwall-core", for
+// this platform, checks it against the release's checksums.txt, and
+// replaces exe (through symlinks) with the bin inside. On any error exe is
+// left as it was.
+func Install(ctx context.Context, c *http.Client, rel Release, exe, bin string) error {
+	return install(ctx, c, rel, exe, bin, runtime.GOOS, runtime.GOARCH)
+}
+
+// asset is the release archive of bin for goos and goarch, and the file in
+// it. pitwall-core is released for Linux only.
+func asset(bin, goos, goarch string) (name, member string, err error) {
+	switch {
+	case bin != "pitwall" && goos != "linux":
+		return "", "", fmt.Errorf("%s has no release for %s", bin, goos)
+	case goos == "windows":
+		return fmt.Sprintf("%s_%s_%s.zip", bin, goos, goarch), bin + ".exe", nil
+	}
+	return fmt.Sprintf("%s_%s_%s.tar.gz", bin, goos, goarch), bin, nil
 }
 
 // install is Install for goos and goarch.
-func install(ctx context.Context, c *http.Client, rel Release, exe, goos, goarch string) error {
-	name, extract, bin := fmt.Sprintf("pitwall_%s_%s.tar.gz", goos, goarch), extractTar, "pitwall"
+func install(ctx context.Context, c *http.Client, rel Release, exe, bin, goos, goarch string) error {
+	name, member, err := asset(bin, goos, goarch)
+	if err != nil {
+		return err
+	}
+	extract := extractTar
 	if goos == "windows" {
-		name, extract, bin = fmt.Sprintf("pitwall_%s_%s.zip", goos, goarch), extractZip, "pitwall.exe"
+		extract = extractZip
 	}
 	sums, err := get(ctx, c, rel.asset("checksums.txt"), 1<<20)
 	if err != nil {
@@ -182,7 +214,7 @@ func install(ctx context.Context, c *http.Client, rel Release, exe, goos, goarch
 	if err := verify(sums, name, arc); err != nil {
 		return err
 	}
-	data, err := extract(arc, bin)
+	data, err := extract(arc, member)
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
@@ -215,7 +247,7 @@ func extractTar(arc []byte, bin string) ([]byte, error) {
 	for {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return nil, errors.New("no pitwall binary in the archive")
+			return nil, fmt.Errorf("no %s in the archive", bin)
 		}
 		if err != nil {
 			return nil, err
@@ -242,7 +274,7 @@ func extractZip(arc []byte, bin string) ([]byte, error) {
 			return readMax(r, 512<<20)
 		}
 	}
-	return nil, errors.New("no pitwall binary in the archive")
+	return nil, fmt.Errorf("no %s in the archive", bin)
 }
 
 // replace writes bin next to exe and renames it over exe, so a crash

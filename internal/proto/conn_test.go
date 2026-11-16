@@ -11,6 +11,7 @@ import (
 	"net"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -428,5 +429,66 @@ func TestLevel63Peer(t *testing.T) {
 	}
 	if m := gobCopy[oldApprove](t, ChatApprove{Chat: "c", Decision: "allow"}); m != (oldApprove{Chat: "c", Decision: "allow"}) {
 		t.Errorf("old reader of a new approve: %+v", m)
+	}
+}
+
+// A daemon from before the JSON socket reads a JSON line as a gob frame
+// whose length is past the limit, and drops the connection.
+func TestRecvRejectsJSONFrame(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	go io.WriteString(a, `{"type":"hello","protocol":1,"client":{"name":"script"}}`+"\n")
+	if m, err := NewConn(b).Recv(); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("got %v, %v; want the frame size refused", m, err)
+	}
+}
+
+// The daemon tells JSON from gob by the first byte: a gob frame's length
+// never starts with '{'.
+func TestFrameSizeBelowJSON(t *testing.T) {
+	if maxFrameSize >= 0x7b<<24 {
+		t.Fatalf("maxFrameSize %#x reaches '{' (%#x)", maxFrameSize, 0x7b<<24)
+	}
+}
+
+// TestSendAfterPeerLeft: a peer that says why it refuses and closes is
+// still heard by a client whose next send fails.
+func TestSendAfterPeerLeft(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a unix socket pair")
+	}
+	ln, err := net.Listen("unix", filepath.Join(t.TempDir(), "s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	left := make(chan struct{})
+	go func() {
+		defer close(left)
+		nc, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		peer := NewConn(nc)
+		peer.Recv()
+		peer.Send(Refusal())
+		peer.Close()
+	}()
+	nc, err := net.Dial("unix", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := NewConn(nc)
+	defer c.Close()
+	if err := c.Send(Hello{Version: Version}); err != nil {
+		t.Fatal(err)
+	}
+	<-left
+	for c.Send(Sync{}) == nil { // the first send after a close can still succeed
+	}
+	msg, err := c.Recv()
+	if e, ok := msg.(Error); !ok || e != Refusal() {
+		t.Fatalf("got %v, %v; want the refusal", msg, err)
 	}
 }
