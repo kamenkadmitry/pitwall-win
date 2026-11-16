@@ -1,12 +1,16 @@
 package app
 
 import (
+	"errors"
+	"log"
+
 	"gioui.org/io/key"
 	gl "gioui.org/layout"
 
 	"github.com/quanticstudios/pitwall/internal/config"
 	"github.com/quanticstudios/pitwall/internal/model"
 	"github.com/quanticstudios/pitwall/internal/ui/settings"
+	"github.com/quanticstudios/pitwall/internal/ui/sidebar"
 )
 
 // openSettings shows the settings page in place of the active tab's panes.
@@ -59,7 +63,47 @@ func (u *ui) layoutSettings(gtx gl.Context, st *model.State) {
 	}
 	u.settings.Limits = u.limits.get()
 	u.settings.Skillshare = ssShown
-	u.settingsResult(u.settings.Layout(gtx, u.th, u.cfg, u.probs))
+	u.settings.WindowHosts, u.settings.OneHost = windowHosts(u.hosts), Host != ""
+	r := u.settings.Layout(gtx, u.th, u.cfg, u.probs)
+	if r != settings.RestartWindow {
+		u.settingsResult(r)
+		return
+	}
+	u.settings.RestartErr = ""
+	if err := u.restartWindow(st); err != nil {
+		log.Printf("restart the window for its hosts: %q", err)
+		u.settings.RestartErr = err.Error()
+	}
+}
+
+// windowHosts are the hosts among hosts, the window's machines, for the
+// settings page: every one but this machine.
+func windowHosts(hosts []sidebar.HostInfo) []settings.WindowHost {
+	var out []settings.WindowHost
+	for _, h := range hosts {
+		if h.Name != "" {
+			out = append(out, settings.WindowHost{Name: h.Name, SSH: h.SSH})
+		}
+	}
+	return out
+}
+
+// restartWindow opens this window again in a process of its own, on the
+// same session and tab, and closes this one. The new window reads
+// [[hosts]] as it is now; the daemon keeps every tab meanwhile.
+func (u *ui) restartWindow(st *model.State) error {
+	s := st.Session(u.nav.session)
+	switch {
+	case Relaunch == nil:
+		return errors.New("this build cannot open a window")
+	case s == nil || s.Name == "":
+		return errors.New("no session to reopen on")
+	}
+	if err := Relaunch(s.Name, u.nav.workspace); err != nil {
+		return err
+	}
+	u.relaunched = true
+	return nil
 }
 
 func (u *ui) settingsResult(r settings.Result) {

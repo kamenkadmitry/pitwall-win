@@ -93,6 +93,12 @@ ssh = "me@box.example.com"
 window = true
 ```
 
+A window reads these entries once, when it starts. After a change, a
+window that is already open keeps the hosts it started with until it
+restarts; Settings, Hosts says which hosts differ and offers Restart
+window, which reopens the window on the same session and tab while the
+tabs keep running in the daemon.
+
 The sidebar then lists `local` and `box` above the tabs, each with its
 sessions, and a click on one shows it. Below them, Waiting on you lists the
 agents on any host that wait on an approval, a question, a plan or an
