@@ -51,6 +51,7 @@ type hostsPage struct {
 
 // hostCheckState is the check's state as the form shows it.
 type hostCheckState struct {
+	saved      bool // the destination is the saved host's own: Save needs no check
 	probe      int
 	probeOut   string
 	installing bool
@@ -64,10 +65,11 @@ type hostCheckState struct {
 func (e *hostsPage) check(dest string) hostCheckState {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	saved := e.old != "" && dest == e.oldDest
 	if e.probeDest != dest {
-		return hostCheckState{}
+		return hostCheckState{saved: saved}
 	}
-	return hostCheckState{e.probe, e.probeOut, e.installing, e.installOut, e.installErr}
+	return hostCheckState{saved, e.probe, e.probeOut, e.installing, e.installOut, e.installErr}
 }
 
 // editHost opens the editor on h, or on a new host for nil.
@@ -102,12 +104,8 @@ func (p *Page) editHost(h *config.Host) {
 // edit left alone needs none, so "in every window" can go off, or the host
 // be renamed with its ssh kept, while the machine is down.
 func (p *Page) canSave() bool {
-	e := &p.ho
-	dest := e.hostDest()
-	if e.old != "" && dest == e.oldDest {
-		return true
-	}
-	return e.check(dest).probe == probeDaemon
+	s := p.ho.check(p.ho.hostDest())
+	return s.saved || s.probe == probeDaemon
 }
 
 // saveHost writes the editor's host. Enter in a field lands here too, so
@@ -360,6 +358,9 @@ func viewOf(s hostCheckState) hostCheckView {
 	switch s.probe {
 	case probeIdle:
 		v.status, v.canCheck = "Check first — Save activates after a green check.", true
+		if s.saved {
+			v.status = "Not checked. The destination is as saved, so Save needs no check."
+		}
 	case probeRunning:
 		v.status, v.busy = "Checking…", true
 	case probeDaemon:

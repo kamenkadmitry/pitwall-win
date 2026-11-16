@@ -88,12 +88,12 @@ func TestProbeResult(t *testing.T) {
 		{stderr: "kex_exchange_identification: read: Connection reset by peer\nssh: connect to host box port 22: Connection refused\n", err: exit(255),
 			want: probeFail, wantOut: "ssh: connect to host box port 22: Connection refused"},
 		{stderr: "Host key verification failed.\n", err: exit(255),
-			want: probeFail, wantOut: "Host key verification failed.. Run ssh me@box in a terminal once to accept the host's key, then check again"},
+			want: probeFail, wantOut: "Host key verification failed. Run ssh me@box in a terminal once to accept the host's key, then check again"},
 		{stderr: "me@box: Permission denied (publickey,password).\n", err: exit(255),
-			want: probeFail, wantOut: "me@box: Permission denied (publickey,password).. The check cannot type a password or passphrase: set up key login, or load the key into ssh-agent, then check again"},
+			want: probeFail, wantOut: "me@box: Permission denied (publickey,password). The check cannot type a password or passphrase: set up key login, or load the key into ssh-agent, then check again"},
 		// A host whose shell has no sh, as cmd.exe on Windows: not "no pitwall".
 		{stderr: "'sh' is not recognized as an internal or external command,\noperable program or batch file.\n", err: exit(1),
-			want: probeFail, wantOut: "operable program or batch file."},
+			want: probeFail, wantOut: "operable program or batch file"},
 		{err: exit(3), want: probeFail, wantOut: "exit status 3"},
 		{out: "pitwall-probe\t/usr/bin/pitwall\tok\tpitwall v0.2.13\n", err: exit(255), timedOut: true, want: probeFail, wantOut: "no answer in 15s"},
 	} {
@@ -229,6 +229,10 @@ func TestHostCheckState(t *testing.T) {
 	if got := e.check("box2"); got != (hostCheckState{}) {
 		t.Fatalf("check of another destination = %+v, want none", got)
 	}
+	e.old, e.oldDest = "box", "box"
+	if !e.check("box").saved || e.check("box2").saved {
+		t.Fatalf("saved: %+v for the saved destination, %+v for another", e.check("box"), e.check("box2"))
+	}
 }
 
 // The row offers Check after every result and Install only on a host
@@ -241,6 +245,8 @@ func TestHostCheckView(t *testing.T) {
 		wantInstall, wantInStatus string
 	}{
 		{s: hostCheckState{}, check: true, wantInStatus: "Check first"},
+		// A saved host with its destination kept: Save is on, and the row says why.
+		{s: hostCheckState{saved: true}, check: true, wantInStatus: "Save needs no check"},
 		{s: hostCheckState{probe: probeRunning}, busy: true, wantInStatus: "Checking"},
 		{s: hostCheckState{probe: probeDaemon, probeOut: "/usr/bin/pitwall"}, check: true, tone: toneGreen, wantInStatus: "/usr/bin/pitwall"},
 		{s: hostCheckState{probe: probeNoDaemon}, check: true, install: true, tone: toneYellow, wantInStatus: "no pitwall"},

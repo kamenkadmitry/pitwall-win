@@ -170,6 +170,8 @@ func sshFailure(stderr string, err error, dest string) string {
 	if msg == "" {
 		msg = err.Error()
 	}
+	// ssh ends some of its lines with a full stop; the hints add their own.
+	msg = strings.TrimSuffix(msg, ".")
 	switch {
 	case strings.Contains(stderr, "Host key verification failed"):
 		// why: BatchMode refuses a host whose key ssh has not stored.
@@ -184,8 +186,8 @@ func sshFailure(stderr string, err error, dest string) string {
 // from ssh's stdin, pinned to the upstream release this pitwall of version
 // ver was made from, or the latest for a build that is no release. The
 // outer sh -c keeps it the same under any login shell. The script installs
-// pitwall, not pitwall-core: remote-start runs pitwall, and the pinned
-// release has no pitwall-core.
+// pitwall, not pitwall-core: remote-start runs pitwall, and v0.2.13, the
+// release a v0.2.13-win build pins, has no pitwall-core.
 func installCommand(ver string) string {
 	pin := ""
 	if v := update.HostRelease(ver); v != "" {
