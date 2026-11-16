@@ -88,22 +88,65 @@ func windowHosts(hosts []sidebar.HostInfo) []settings.WindowHost {
 	return out
 }
 
-// restartWindow opens this window again in a process of its own, on the
-// same session and tab, and closes this one. The new window reads
-// [[hosts]] as it is now; the daemon keeps every tab meanwhile.
+// restartWindow opens this window again in a process of its own and
+// closes this one. The new window reads [[hosts]] as it is now; the daemon
+// keeps every tab meanwhile.
 func (u *ui) restartWindow(st *model.State) error {
-	s := st.Session(u.nav.session)
-	switch {
-	case Relaunch == nil:
+	if Relaunch == nil {
 		return errors.New("this build cannot open a window")
-	case s == nil || s.Name == "":
-		return errors.New("no session to reopen on")
 	}
-	if err := Relaunch(s.Name, u.nav.workspace); err != nil {
+	name, tab := u.reopenOn(st)
+	if name == "" {
+		return errors.New("no session of this machine to reopen on")
+	}
+	if err := Relaunch(name, tab); err != nil {
 		return err
 	}
 	u.relaunched = true
 	return nil
+}
+
+// reopenOn is the session and tab a restarted window opens on: the ones it
+// shows when the session is this machine's, else this machine's most
+// recently used session and a tab of it. "" means there is none.
+//
+// why: the new window asks this machine's daemon for the session by name,
+// and that daemon makes a session of a name it does not know, with a
+// shell in it. A session that is on another host alone must not go there.
+func (u *ui) reopenOn(st *model.State) (name, tab string) {
+	if s := st.Session(u.nav.session); s != nil && s.Name != "" && u.sessionHost(s.ID) == "" {
+		return s.Name, u.nav.workspace
+	}
+	var here *model.Session
+	for i := range st.Sessions {
+		s := &st.Sessions[i]
+		if s.Name == "" || u.sessionHost(s.ID) != "" {
+			continue
+		}
+		// why: a window opens on a tab; without one the new process would
+		// only raise this window, which is about to close.
+		t := u.tabHere(st, s.ID)
+		if t == "" {
+			continue
+		}
+		if here == nil || s.UsedAt.After(here.UsedAt) {
+			here, tab = s, t
+		}
+	}
+	if here == nil {
+		return "", ""
+	}
+	return here.Name, tab
+}
+
+// tabHere is a tab of session on this machine, "" when it has none.
+func (u *ui) tabHere(st *model.State, session string) string {
+	for _, w := range st.Workspaces {
+		if w.SessionID == session && u.hostOf(w.ID) == "" {
+			return w.ID
+		}
+	}
+	return ""
 }
 
 func (u *ui) settingsResult(r settings.Result) {

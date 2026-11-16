@@ -354,6 +354,10 @@ func TestWindowHostsChange(t *testing.T) {
 			t.Errorf("%d: windowHostsChange = %q, want %q", i, got, c.want)
 		}
 	}
+	// The same hosts, listed in another order in config.toml.
+	if got, want := windowHostsChange(cfg, []WindowHost{{"nocobase", "nocobase"}, {"alter-core", "alter-core"}}), "In this window the hosts are in their old order: nocobase, alter-core."; got != want {
+		t.Errorf("another order: %q, want %q", got, want)
+	}
 	if got := windowHostsChange(nil, nil); got != "" {
 		t.Errorf("no hosts at all: %q", got)
 	}

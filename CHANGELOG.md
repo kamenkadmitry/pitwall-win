@@ -24,7 +24,7 @@ takes `--dry-run`.
 
 ## Unreleased
 
-- Settings, Hosts offers Restart window when the hosts this window shows differ from `[[hosts]]`: a window reads its hosts once, when it starts, so a host added in the editor was missing from the + menu and the sidebar with no word of why. The row names the hosts that are not in the window yet, are still in it, or are on their old ssh destination; the button reopens the window on the same session and tab, and the tabs keep running in the daemon meanwhile. A `pitwall --host` window, which shows its one host whatever `[[hosts]]` says, has no such row.
+- Settings, Hosts offers Restart window when the hosts this window shows differ from `[[hosts]]`: a window reads its hosts once, when it starts, so a host added in the editor was missing from the + menu and the sidebar with no word of why. The row names the hosts that are not in the window yet, are still in it, are on their old ssh destination or are in their old order; the button reopens the window on the same session and tab, or on a session of this machine when the one shown is another host's, and the tabs keep running in the daemon meanwhile. A `pitwall --host` window, which shows its one host whatever `[[hosts]]` says, has no such row.
 
 ## v0.2.14-win.1
 

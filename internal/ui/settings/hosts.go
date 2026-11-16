@@ -265,9 +265,10 @@ func windowHostsChange(hosts []config.Host, shown []WindowHost) string {
 		}
 	}
 	was := map[string]string{}
-	var added, removed, moved []string
+	var have, added, removed, moved []string
 	for _, h := range shown {
 		was[h.Name] = h.SSH
+		have = append(have, h.Name)
 		switch dest, ok := now[h.Name]; {
 		case !ok:
 			removed = append(removed, h.Name)
@@ -289,6 +290,11 @@ func windowHostsChange(hosts []config.Host, shown []WindowHost) string {
 	}
 	if len(moved) > 0 {
 		parts = append(parts, "On its old ssh destination in this window: "+strings.Join(moved, ", ")+".")
+	}
+	// The same hosts in another order: a window lists them as [[hosts]]
+	// did when it started.
+	if len(parts) == 0 && !slices.Equal(want, have) {
+		parts = append(parts, "In this window the hosts are in their old order: "+strings.Join(have, ", ")+".")
 	}
 	return strings.Join(parts, " ")
 }
