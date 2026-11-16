@@ -22,7 +22,7 @@ Without that key or the Android SDK/NDK, tagging still succeeds and prints
 the retry command, `sh scripts/apk-release.sh vX.Y.Z`. Either release step
 takes `--dry-run`.
 
-## Unreleased
+## v0.2.13-win.2
 
 - The host editor on Settings, Hosts offers a filterable dropdown of the machine names ssh already knows from `~/.ssh/config` and previews the `[[hosts]]` table it will write. A new host's "in every window" switch defaults on, a pasted `ssh ` prefix in the ssh field is dropped, and the field's help says it takes the destination only.
 - Check connection in the host editor probes the destination over ssh and says whether the host has a pitwall that starts. It looks where a window does, on the host's `PATH` and in `~/.local/bin`, and runs `pitwall --version` there. Green names the version and its path, yellow means the host has none, and red gives the loader's reason for a pitwall that does not start, or what ssh said, with what to do about an unknown host key or a login that needs a password. Save activates after a green check of the destination the fields name, and Enter in a field holds the same gate. A saved host whose destination is unchanged saves without a check, so "in every window" can go off while the machine is down.
