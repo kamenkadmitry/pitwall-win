@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -68,6 +69,49 @@ func owns(self, bin string) bool {
 // config, names in a hook command or a generated file's `const bin` and
 // that are this install (owns).
 func ownedBins(self string, original []byte) []string {
+	var out []string
+	for _, bin := range namedBins(original) {
+		if bin != self && filepath.IsAbs(bin) && !slices.Contains(out, bin) && owns(self, bin) {
+			out = append(out, bin)
+		}
+	}
+	return out
+}
+
+// goneBins are the pitwall binaries other than self that original names
+// and that are no longer there: an install that was moved, renamed or
+// deleted, as a build in a checkout is. Its hooks can only fail, and no
+// pitwall is left to take them out, so an install or uninstall of this one
+// does. A binary of another name, or one that cannot be looked at, stays.
+func goneBins(self string, original []byte) []string {
+	var out []string
+	for _, bin := range namedBins(original) {
+		// why: a hook command names its binary with forward slashes on
+		// Windows, and self comes with backward ones.
+		if samePath(bin, self) || !filepath.IsAbs(bin) || slices.Contains(out, bin) ||
+			!strings.HasPrefix(strings.ToLower(filepath.Base(bin)), "pitwall") {
+			continue
+		}
+		if _, err := os.Stat(bin); errors.Is(err, os.ErrNotExist) {
+			out = append(out, bin)
+		}
+	}
+	return out
+}
+
+// samePath reports whether a and b name one file as written: with either
+// slash on Windows, where the case of letters does not tell paths apart.
+func samePath(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// namedBins are the binaries original, an agent config, names in a hook
+// command or a generated file's `const bin`.
+func namedBins(original []byte) []string {
 	var found []string
 	var walk func(v any)
 	walk = func(v any) {
@@ -96,13 +140,7 @@ func ownedBins(self string, original []byte) []string {
 			found = append(found, bin)
 		}
 	}
-	var out []string
-	for _, bin := range found {
-		if bin != self && filepath.IsAbs(bin) && !slices.Contains(out, bin) && owns(self, bin) {
-			out = append(out, bin)
-		}
-	}
-	return out
+	return found
 }
 
 // others are what gen writes for each binary ownedBins finds in original.
@@ -220,10 +258,36 @@ func hooks(args []string, out io.Writer, plans *[]hookPlan) error {
 		}
 		return err
 	}
-	jsonHooks := func(gen func(string) []byte) func([]byte) ([]byte, []string, error) {
-		return func(original []byte) ([]byte, []string, error) {
-			return mergeHooks(original, gen(bin), install, others(bin, original, gen)...)
+	// dropGone is original without the hooks pitwall wrote for binaries
+	// that are gone (goneBins), which merge, a config's merger, takes out
+	// as an uninstall of each would.
+	dropGone := func(original []byte, gen func(string) []byte, merge func([]byte, []byte, bool, ...[]byte) ([]byte, []string, error)) ([]byte, []string, error) {
+		data := original
+		var changes []string
+		for _, gone := range goneBins(bin, original) {
+			d, more, err := merge(data, gen(gone), false)
+			if err != nil {
+				return nil, nil, err
+			}
+			if len(more) > 0 { // why: a merger writes the file anew even when it changes nothing
+				data, changes = d, append(changes, more...)
+			}
 		}
+		return data, changes, nil
+	}
+	// withoutGone is merge with gen's hooks for this install, after dropGone.
+	withoutGone := func(gen func(string) []byte, merge func([]byte, []byte, bool, ...[]byte) ([]byte, []string, error)) func([]byte) ([]byte, []string, error) {
+		return func(original []byte) ([]byte, []string, error) {
+			data, dropped, err := dropGone(original, gen, merge)
+			if err != nil {
+				return nil, nil, err
+			}
+			data, changes, err := merge(data, gen(bin), install, others(bin, original, gen)...)
+			return data, append(dropped, changes...), err
+		}
+	}
+	jsonHooks := func(gen func(string) []byte) func([]byte) ([]byte, []string, error) {
+		return withoutGone(gen, mergeHooks)
 	}
 	// skill is pitwall's skill in an agent's home dir.
 	skill := func(dir string) config {
@@ -234,8 +298,24 @@ func hooks(args []string, out io.Writer, plans *[]hookPlan) error {
 	files := []config{
 		{path: filepath.Join(agent.ClaudeDir(home), "settings.json"), merge: func(original []byte) ([]byte, []string, error) {
 			data, changes, err := jsonHooks(agent.ClaudeHooks)(original)
-			if err != nil || install && !statusline {
+			if err != nil {
 				return data, changes, err
+			}
+			// A status line through a pitwall that is gone prints nothing:
+			// it comes out, and an install puts this pitwall's in its place,
+			// asked for or not, since the user had asked for one.
+			hadGone := false
+			for _, gone := range goneBins(bin, original) {
+				d, more, err := mergeStatusline(data, gone, false)
+				if err != nil {
+					return nil, nil, err
+				}
+				if len(more) > 0 {
+					data, changes, hadGone = d, append(changes, more...), true
+				}
+			}
+			if install && !statusline && !hadGone {
+				return data, changes, nil
 			}
 			data, more, err := mergeStatusline(data, bin, install, ownedBins(bin, original)...)
 			return data, append(changes, more...), err
@@ -260,7 +340,7 @@ func hooks(args []string, out io.Writer, plans *[]hookPlan) error {
 	}
 	if dir := agent.GeminiDir(home); installed("gemini", dir) {
 		files = append(files, config{path: filepath.Join(dir, "settings.json"), merge: func(original []byte) ([]byte, []string, error) {
-			data, changes, err := mergeHooks(original, agent.GeminiHooks(bin), install, others(bin, original, agent.GeminiHooks)...)
+			data, changes, err := withoutGone(agent.GeminiHooks, mergeHooks)(original)
 			if err != nil {
 				// why: Gemini reads settings.json with comments, which this merge cannot keep; the other agents still install.
 				return nil, nil, skipError{err.Error() + "; add the block `pitwall hooks` prints by hand"}
@@ -269,9 +349,7 @@ func hooks(args []string, out io.Writer, plans *[]hookPlan) error {
 		}})
 	}
 	if dir := agent.CursorDir(home); installed("cursor-agent", dir) {
-		files = append(files, config{path: filepath.Join(dir, "hooks.json"), merge: func(original []byte) ([]byte, []string, error) {
-			return mergeCursorHooks(original, agent.CursorHooks(bin), install, others(bin, original, agent.CursorHooks)...)
-		}})
+		files = append(files, config{path: filepath.Join(dir, "hooks.json"), merge: withoutGone(agent.CursorHooks, mergeCursorHooks)})
 	}
 	if dir := agent.OpenCodeDir(home); installed("opencode", dir) {
 		plugin := func(original []byte) ([]byte, []string, error) {
