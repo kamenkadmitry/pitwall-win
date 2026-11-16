@@ -100,6 +100,8 @@ jobs:
           sh -n scripts/install.sh
           sh -n scripts/get.sh
           sh scripts/get_test.sh
+          sh -n scripts/get-host.sh
+          sh scripts/get-host_test.sh
           sh scripts/release_test.sh
           sh scripts/apk_test.sh
           sh scripts/apk-release_test.sh

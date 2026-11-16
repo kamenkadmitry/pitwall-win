@@ -26,6 +26,7 @@ import (
 type hostsPage struct {
 	open    bool
 	old     string // the host being edited, "" for a new one
+	oldDest string // its ssh destination as saved
 	window  bool
 	name    widget.Editor
 	ssh     widget.Editor
@@ -36,8 +37,11 @@ type hostsPage struct {
 
 	aliases []string // the ssh config's Host names, for the new-host picker
 
+	// The check's state. Its goroutines write it, so mu guards it; they
+	// never touch the fields above, which belong to the frame.
 	mu         sync.Mutex
 	gen        int    // bumps per probe/install; a stale result drops
+	probeDest  string // the destination the state below is about
 	probe      int    // a probe* const
 	probeOut   string // the found binary, or ssh's error line
 	installing bool
@@ -45,14 +49,35 @@ type hostsPage struct {
 	installErr bool
 }
 
+// hostCheckState is the check's state as the form shows it.
+type hostCheckState struct {
+	probe      int
+	probeOut   string
+	installing bool
+	installOut string
+	installErr bool
+}
+
+// check is the check's state for dest. A result for another destination,
+// as after an edit of the fields, counts as none: it says nothing about
+// the host the form would save.
+func (e *hostsPage) check(dest string) hostCheckState {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.probeDest != dest {
+		return hostCheckState{}
+	}
+	return hostCheckState{e.probe, e.probeOut, e.installing, e.installOut, e.installErr}
+}
+
 // editHost opens the editor on h, or on a new host for nil.
 func (p *Page) editHost(h *config.Host) {
 	e := &p.ho
 	e.open, e.err, e.confirm, e.focus, e.scroll = true, "", false, true, true
 	e.window = h == nil // a new host shows in every window by default
-	e.old = ""
+	e.old, e.oldDest = "", ""
 	e.mu.Lock()
-	e.probe, e.probeOut, e.installing, e.installOut, e.installErr = probeIdle, "", false, "", false
+	e.probeDest, e.probe, e.probeOut, e.installing, e.installOut, e.installErr = "", probeIdle, "", false, "", false
 	e.gen++
 	e.mu.Unlock()
 	e.aliases = nil
@@ -60,6 +85,7 @@ func (p *Page) editHost(h *config.Host) {
 		e.old, e.window = h.Name, h.Window
 		e.name.SetText(h.Name)
 		e.ssh.SetText(h.SSH)
+		e.oldDest = e.hostDest()
 	} else {
 		e.name.SetText("")
 		e.ssh.SetText("")
@@ -71,9 +97,27 @@ func (p *Page) editHost(h *config.Host) {
 	}
 }
 
-// saveHost writes the editor's host.
+// canSave reports whether Save may write the editor's host: a green check
+// of the destination the fields name. A saved host whose destination the
+// edit left alone needs none, so "in every window" can go off, or the host
+// be renamed with its ssh kept, while the machine is down.
+func (p *Page) canSave() bool {
+	e := &p.ho
+	dest := e.hostDest()
+	if e.old != "" && dest == e.oldDest {
+		return true
+	}
+	return e.check(dest).probe == probeDaemon
+}
+
+// saveHost writes the editor's host. Enter in a field lands here too, so
+// it holds the same gate as the Save button.
 func (p *Page) saveHost() {
 	e := &p.ho
+	if !p.canSave() {
+		e.err = "check the connection first: Save needs a green check of this destination"
+		return
+	}
 	h := config.Host{Name: strings.TrimSpace(e.name.Text()), SSH: cleanSSHDest(e.ssh.Text()), Window: e.window}
 	if err := config.SetHost(p.path(), e.old, &h); err != nil {
 		e.err = err.Error()
@@ -110,7 +154,8 @@ func (p *Page) checkHost() {
 	e.mu.Lock()
 	e.gen++
 	gen := e.gen
-	e.probe, e.probeOut, e.installing, e.installOut = probeRunning, "", false, ""
+	e.probeDest, e.probe, e.probeOut = dest, probeRunning, ""
+	e.installing, e.installOut, e.installErr = false, "", false
 	e.mu.Unlock()
 	go func() {
 		st, out := probeHost(dest)
@@ -122,33 +167,42 @@ func (p *Page) checkHost() {
 	}()
 }
 
-// installHost runs get.sh --core on the editor's host in the background,
-// then probes again so the result shows right away.
+// installHost runs get-host.sh on the editor's host in the background, then
+// probes it again, so the form shows at once whether a window would now
+// find pitwall there.
 func (p *Page) installHost() {
 	e := &p.ho
-	dest := e.hostDest()
-	if dest == "" || e.installing {
+	dest, ver := e.hostDest(), p.ver
+	if dest == "" {
 		return
 	}
 	e.mu.Lock()
+	if e.installing && e.probeDest == dest {
+		e.mu.Unlock()
+		return
+	}
 	e.gen++
 	gen := e.gen
+	e.probeDest = dest
 	e.installing, e.installOut, e.installErr = true, "", false
 	e.mu.Unlock()
 	go func() {
-		out, err := installCore(dest)
-		tail := lastLines(string(out), 4)
+		out, err := installPitwall(dest, ver)
+		tail := lastLines(out, 4)
+		st, probeOut := probeIdle, ""
 		if err != nil {
-			tail = err.Error() + "\n" + tail
+			tail = strings.TrimSpace(err.Error() + "\n" + tail)
+		} else {
+			st, probeOut = probeHost(dest)
 		}
 		e.mu.Lock()
 		if gen == e.gen {
 			e.installing, e.installOut, e.installErr = false, tail, err != nil
+			if err == nil {
+				e.probe, e.probeOut = st, probeOut
+			}
 		}
 		e.mu.Unlock()
-		if err == nil {
-			p.checkHost()
-		}
 	}()
 }
 
@@ -214,15 +268,12 @@ func (p *Page) hostForm(btn func(id, label string, kind btnKind, click func()) g
 			extra: "host window sidebar show", control: p.switchOf("host-window", e.window, func() { e.window = !e.window })},
 		row{label: "Saved as", desc: "The [[hosts]] table this writes to config.toml.", extra: "host config toml saved", wide: true,
 			control: p.hostToml},
-		row{label: "Connection", desc: "Probes ssh to the fields' destination, then checks the host has pitwall on its PATH.",
+		row{label: "Connection", desc: "Probes ssh to the fields' destination, then checks the host has pitwall on its PATH or in ~/.local/bin, where a window looks for it.",
 			extra: "host test check connect install daemon", wide: true,
 			control: p.hostCheck(btn)})
 
-	e.mu.Lock()
-	saveOK := e.probe == probeDaemon
-	e.mu.Unlock()
 	saveBtn := btn("host-save", "Save", primary, p.saveHost)
-	if !saveOK {
+	if !p.canSave() {
 		saveBtn = p.ghostBtn("Save")
 	}
 	buttons := []gl.Widget{saveBtn, btn("host-cancel", "Cancel", secondary, func() { e.open = false })}
@@ -276,55 +327,98 @@ func (p *Page) hostToml(gtx gl.Context) gl.Dimensions {
 	})
 }
 
+// hostCheckView is what the Connection row shows for a check's state: the
+// probe's line and its tone, the installer's lines under it, and which
+// buttons the row offers. While a probe or an install runs there is none.
+type hostCheckView struct {
+	status      string
+	tone        int // toneMuted and its siblings
+	install     string
+	installFail bool
+	canCheck    bool
+	canInstall  bool
+	busy        bool // redraw until the goroutine's result lands
+}
+
+const (
+	toneMuted = iota
+	toneGreen
+	toneYellow
+	toneRed
+)
+
+// viewOf is s's row. Check stays on offer after every result, so a host
+// fixed by hand can be checked again; Install only when ssh works and the
+// host has no pitwall that starts.
+func viewOf(s hostCheckState) hostCheckView {
+	v := hostCheckView{install: s.installOut, installFail: s.installErr}
+	if s.installing {
+		v.status, v.busy = "Installing pitwall…", true
+		return v
+	}
+	switch s.probe {
+	case probeIdle:
+		v.status, v.canCheck = "Check first — Save activates after a green check.", true
+	case probeRunning:
+		v.status, v.busy = "Checking…", true
+	case probeDaemon:
+		v.status, v.tone, v.canCheck = "All good — "+cmp.Or(s.probeOut, "pitwall is installed")+". Save is active.", toneGreen, true
+	case probeNoDaemon:
+		v.status, v.tone = "ssh works, but the host has no pitwall on its PATH or in ~/.local/bin.", toneYellow
+		v.canCheck, v.canInstall = true, true
+	case probeBroken:
+		v.status, v.tone = "ssh works, but "+s.probeOut+".", toneRed
+		v.canCheck, v.canInstall = true, true
+	case probeFail:
+		v.status, v.tone, v.canCheck = "Check failed: "+s.probeOut, toneRed, true
+	}
+	return v
+}
+
 // hostCheck is the Check connection button, the Install button when the
-// host lacks pitwall, and the probe's result under them.
+// host lacks pitwall, the probe's result under them and then the
+// installer's last lines.
 func (p *Page) hostCheck(btn func(id, label string, kind btnKind, click func()) gl.Widget) gl.Widget {
 	th := p.th
 	e := &p.ho
 	return func(gtx gl.Context) gl.Dimensions {
-		e.mu.Lock()
-		probe, probeOut := e.probe, e.probeOut
-		installing, installOut, installErr := e.installing, e.installOut, e.installErr
-		e.mu.Unlock()
-
-		var status string
-		statusCol := th.Muted
+		v := viewOf(e.check(e.hostDest()))
+		if v.busy {
+			gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(200 * time.Millisecond)})
+		}
 		var buttons []gl.Widget
-		switch probe {
-		case probeIdle:
-			status = "Check first — Save activates after a green check."
-			buttons = append(buttons, btn("host-check", "Check connection", secondary, p.checkHost))
-		case probeRunning:
-			status = "Checking…"
-			gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(200 * time.Millisecond)})
-		case probeDaemon:
-			status, statusCol = "All good — "+cmp.Or(probeOut, "pitwall is installed")+". Save is active.", th.Green
-		case probeNoDaemon:
-			status, statusCol = "ssh works, but the host has no pitwall.", th.Yellow
+		if v.canInstall {
 			buttons = append(buttons, btn("host-install", "Install pitwall on the host", primary, p.installHost))
-		case probeFail:
-			status, statusCol = "ssh failed: "+probeOut, th.Red
+		}
+		if v.canCheck {
 			buttons = append(buttons, btn("host-check", "Check connection", secondary, p.checkHost))
 		}
-		if installing {
-			status = "Installing pitwall-core…"
-			statusCol = th.Muted
-			gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(200 * time.Millisecond)})
+		statusCol := th.Muted
+		switch v.tone {
+		case toneGreen:
+			statusCol = th.Green
+		case toneYellow:
+			statusCol = th.Yellow
+		case toneRed:
+			statusCol = th.Red
 		}
-		if installOut != "" {
-			c := th.Green
-			if installErr {
-				c = th.Red
-				buttons = append(buttons, btn("host-install", "Install pitwall on the host", primary, p.installHost))
-			}
-			status += "\n" + installOut
-			statusCol = c
+		installCol := th.Muted
+		if v.installFail {
+			installCol = th.Red
 		}
 		return gl.Flex{Axis: gl.Vertical}.Layout(gtx,
 			gl.Rigid(func(gtx gl.Context) gl.Dimensions { return hstack(gtx, 8, buttons...) }),
 			gl.Rigid(func(gtx gl.Context) gl.Dimensions {
 				return gl.Inset{Top: 8}.Layout(gtx, func(gtx gl.Context) gl.Dimensions {
-					return p.para(gtx, th.UIFont, p.th.Sp(theme.Small), statusCol, status)
+					return p.para(gtx, th.UIFont, p.th.Sp(theme.Small), statusCol, v.status)
+				})
+			}),
+			gl.Rigid(func(gtx gl.Context) gl.Dimensions {
+				if v.install == "" {
+					return gl.Dimensions{}
+				}
+				return gl.Inset{Top: 6}.Layout(gtx, func(gtx gl.Context) gl.Dimensions {
+					return p.para(gtx, th.MonoFont, p.th.Sp(theme.Small), installCol, v.install)
 				})
 			}),
 		)

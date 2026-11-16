@@ -1,6 +1,10 @@
 # why: go:embed copies the checkout byte for byte, so the pi extension and OpenCode plugin pitwall writes must not turn CRLF on Windows.
 *.ts text eol=lf
 *.js text eol=lf
+# why: the same for the skill: a CRLF copy is not the file a release wrote, so IsSkill takes an unedited install for an edited one and never refreshes it.
+internal/agent/pitwall_skill.md text eol=lf
+# why: the binary embeds this script and pipes it to sh on a host, which reads a CRLF line end as part of the command.
+scripts/get-host.sh text eol=lf
 # why: Windows checkouts turn LF into CRLF, and golden files compare byte for byte.
 **/testdata/** -text
 # why: go:embed renders these into the Homebrew, Scoop and AUR files, which are LF like their goldens.

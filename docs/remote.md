@@ -37,22 +37,33 @@ only a `[[hosts]]` name, so an agent starts processes only on machines you
 listed. `local` means this machine, so a `[[hosts]]` entry with that name
 is reported as a config problem and ignored.
 
-Set the host up once:
+Set the host up once: on Settings, Hosts, Check connection says whether
+the host answers and has a pitwall that starts, and Install puts one
+there. By hand it is:
 
 ```sh
-ssh box 'curl -fsSL https://raw.githubusercontent.com/quanticstudios/pitwall/main/scripts/get.sh | sh'
+ssh box 'curl -fsSL https://raw.githubusercontent.com/kamenkadmitry/pitwall-win/main/scripts/get-host.sh | PITWALL_VERSION=v0.2.13 sh'
 ssh box '~/.local/bin/pitwall hooks install'
 ```
+
+`get-host.sh` installs the upstream release `PITWALL_VERSION` names, the
+one this pitwall was made from, on a Linux host. That release links the
+window's libraries (EGL, Wayland, X11, xkbcommon) and does not start
+without every one, even as a daemon, so the script installs those the host
+lacks with `apt-get`, as root or through a sudo that asks no password.
+Without `apt-get` or that sudo it stops and names what to install. A macOS
+host uses upstream's `get.sh`.
 
 The hooks belong on the host, where the agents run: they report to the
 daemon there. pitwall looks for itself on the host's `PATH` and in
 `~/.local/bin`, which a non-interactive ssh login often leaves off the
 `PATH`. When pitwall is missing there, too old for `remote-start`, or of
 another protocol major version, the window does not open and the error
-gives the install command, pinned to this pitwall's release. pitwall never
-installs anything on a host by itself. When the daemon running on the host
-is of another major version than the pitwall installed there, the window
-asks before restarting it, as after an upgrade.
+gives the install command, pinned to the upstream release this pitwall was
+made from. pitwall never installs anything on a host by itself: only
+Install on Settings, Hosts does, when you click it. When the daemon
+running on the host is of another major version than the pitwall installed
+there, the window asks before restarting it, as after an upgrade.
 
 On a Linux host with systemd, run `loginctl enable-linger` there once.
 Without it, logging out of the host's last session, which closing the
