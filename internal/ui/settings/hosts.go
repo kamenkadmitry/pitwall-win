@@ -9,11 +9,16 @@ import (
 	"sync"
 	"time"
 
+	"gioui.org/io/event"
+	"gioui.org/io/key"
+	"gioui.org/io/pointer"
 	gl "gioui.org/layout"
 	"gioui.org/op"
+	"gioui.org/op/clip"
 	"gioui.org/widget"
 
 	"github.com/quanticstudios/pitwall/internal/config"
+	"github.com/quanticstudios/pitwall/internal/ui/kit"
 	"github.com/quanticstudios/pitwall/internal/ui/theme"
 )
 
@@ -44,7 +49,7 @@ type hostsPage struct {
 func (p *Page) editHost(h *config.Host) {
 	e := &p.ho
 	e.open, e.err, e.confirm, e.focus, e.scroll = true, "", false, true, true
-	e.window = false
+	e.window = h == nil // a new host shows in every window by default
 	e.old = ""
 	e.mu.Lock()
 	e.probe, e.probeOut, e.installing, e.installOut, e.installErr = probeIdle, "", false, "", false
@@ -201,17 +206,8 @@ func (p *Page) hostForm(btn func(id, label string, kind btnKind, click func()) g
 			control: p.edField(&e.ssh, "box or me@192.168.0.5", 320, p.saveHost, nil)},
 	}
 	if len(e.aliases) > 0 {
-		chips := make([]gl.Widget, 0, len(e.aliases))
-		for _, a := range e.aliases {
-			a := a
-			chips = append(chips, btn("host-alias:"+a, a, secondary, func() {
-				e.name.SetText(a)
-				e.ssh.SetText("")
-			}))
-		}
-		rows = append(rows, row{label: "From ~/.ssh/config", desc: "Machines ssh already knows; one click fills the name.",
-			extra: "host ssh config alias known", wide: true,
-			control: func(gtx gl.Context) gl.Dimensions { return hstack(gtx, 8, chips...) }})
+		rows = append(rows, row{label: "From ~/.ssh/config", desc: "Machines ssh already knows; picking one fills the name.",
+			extra: "host ssh config alias known", control: p.hostPicker})
 	}
 	rows = append(rows,
 		row{label: "In every window", desc: "Shows this host's sessions in every window, under its own heading, connecting in the background.",
@@ -222,7 +218,14 @@ func (p *Page) hostForm(btn func(id, label string, kind btnKind, click func()) g
 			extra: "host test check connect install daemon", wide: true,
 			control: p.hostCheck(btn)})
 
-	buttons := []gl.Widget{btn("host-save", "Save", primary, p.saveHost), btn("host-cancel", "Cancel", secondary, func() { e.open = false })}
+	e.mu.Lock()
+	saveOK := e.probe == probeDaemon
+	e.mu.Unlock()
+	saveBtn := btn("host-save", "Save", primary, p.saveHost)
+	if !saveOK {
+		saveBtn = p.ghostBtn("Save")
+	}
+	buttons := []gl.Widget{saveBtn, btn("host-cancel", "Cancel", secondary, func() { e.open = false })}
 	if e.old != "" {
 		if e.confirm {
 			buttons = append(buttons, btn("host-delete", "Delete for good", danger, p.deleteHost))
@@ -286,20 +289,22 @@ func (p *Page) hostCheck(btn func(id, label string, kind btnKind, click func()) 
 
 		var status string
 		statusCol := th.Muted
-		buttons := []gl.Widget{btn("host-check", "Check connection", secondary, p.checkHost)}
+		var buttons []gl.Widget
 		switch probe {
 		case probeIdle:
-			status = "Not checked yet."
+			status = "Check first — Save activates after a green check."
+			buttons = append(buttons, btn("host-check", "Check connection", secondary, p.checkHost))
 		case probeRunning:
-			status, statusCol = "Checking…", th.Muted
+			status = "Checking…"
 			gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(200 * time.Millisecond)})
 		case probeDaemon:
-			status, statusCol = "ssh works — "+cmp.Or(probeOut, "pitwall is installed"), th.Green
+			status, statusCol = "All good — "+cmp.Or(probeOut, "pitwall is installed")+". Save is active.", th.Green
 		case probeNoDaemon:
 			status, statusCol = "ssh works, but the host has no pitwall.", th.Yellow
-			buttons = append(buttons, btn("host-install", "Install pitwall-core", primary, p.installHost))
+			buttons = append(buttons, btn("host-install", "Install pitwall on the host", primary, p.installHost))
 		case probeFail:
 			status, statusCol = "ssh failed: "+probeOut, th.Red
+			buttons = append(buttons, btn("host-check", "Check connection", secondary, p.checkHost))
 		}
 		if installing {
 			status = "Installing pitwall-core…"
@@ -310,6 +315,7 @@ func (p *Page) hostCheck(btn func(id, label string, kind btnKind, click func()) 
 			c := th.Green
 			if installErr {
 				c = th.Red
+				buttons = append(buttons, btn("host-install", "Install pitwall on the host", primary, p.installHost))
 			}
 			status += "\n" + installOut
 			statusCol = c
@@ -323,4 +329,190 @@ func (p *Page) hostCheck(btn func(id, label string, kind btnKind, click func()) 
 			}),
 		)
 	}
+}
+
+// ghostBtn is a button that only looks like one: Save before a green
+// check, drawn at half opacity and taking no clicks.
+func (p *Page) ghostBtn(label string) gl.Widget {
+	return func(gtx gl.Context) gl.Dimensions {
+		return kit.Button(gtx, p.th, p.btn("ghost:"+label), primary.Disabled(), kit.Medium, label)
+	}
+}
+
+// ddHosts is the host picker's dropdown id: one dropdown is open at a
+// time, and p.dd names it.
+const ddHosts = "hosts"
+
+// hostPicker is a dropdown of the ssh config's Host names; picking one
+// fills the name field.
+func (p *Page) hostPicker(gtx gl.Context) gl.Dimensions {
+	th := p.th
+	e := &p.ho
+	c := p.btn("dd:" + ddHosts)
+	for c.Clicked(gtx) {
+		if p.dd == ddHosts {
+			p.dd = ""
+		} else {
+			p.dd, p.ddFocus, p.ddList.Position = ddHosts, true, gl.Position{}
+			p.ddFilter.SetText("")
+		}
+	}
+	w, h := gtx.Dp(240), gtx.Dp(32)
+	d := c.Layout(gtx, func(gtx gl.Context) gl.Dimensions {
+		border := th.Border
+		if c.Hovered() || p.dd == ddHosts {
+			border = theme.Mix(th.Border, th.Fg, 0.25)
+		}
+		if gtx.Focused(c) {
+			kit.FocusRing(gtx, th, image.Rect(0, 0, w, h), gtx.Dp(theme.RadiusControl))
+		}
+		rrect(gtx, border, image.Rect(0, 0, w, h), gtx.Dp(6))
+		rrect(gtx, th.SurfaceElevated, image.Rect(1, 1, w-1, h-1), gtx.Dp(6)-1)
+		label := "Pick a machine…"
+		if cur := strings.TrimSpace(e.name.Text()); cur != "" {
+			label = cur
+		}
+		g := gtx
+		g.Constraints.Max.X = w - gtx.Dp(40)
+		m := op.Record(gtx.Ops)
+		td := p.text(g, th.UIFont, p.th.Sp(theme.Body), th.Fg, label)
+		call := m.Stop()
+		o := op.Offset(image.Pt(gtx.Dp(10), (h-td.Size.Y)/2)).Push(gtx.Ops)
+		call.Add(gtx.Ops)
+		o.Pop()
+		is := gtx.Dp(14)
+		o = op.Offset(image.Pt(w-gtx.Dp(10)-is, (h-is)/2)).Push(gtx.Ops)
+		icon(gtx, th.Muted, is, chevronGlyph)
+		o.Pop()
+		defer clip.Rect{Max: image.Pt(w, h)}.Push(gtx.Ops).Pop()
+		pointer.CursorPointer.Add(gtx.Ops)
+		return gl.Dimensions{Size: image.Pt(w, h)}
+	})
+	if p.dd == ddHosts {
+		p.hostPopover(gtx, w, h)
+	}
+	return d
+}
+
+// hostPopover draws the open alias dropdown over everything, below the
+// picker. A press outside it closes it.
+func (p *Page) hostPopover(gtx gl.Context, w, top int) {
+	th := p.th
+	e := &p.ho
+	for {
+		ev, ok := gtx.Event(pointer.Filter{Target: &p.ddTag, Kinds: pointer.Press})
+		if !ok {
+			break
+		}
+		if _, ok := ev.(pointer.Event); ok {
+			p.dd = ""
+		}
+	}
+	for {
+		_, ok := gtx.Event(pointer.Filter{Target: &p.ddPanel, Kinds: pointer.Press})
+		if !ok {
+			break
+		}
+	}
+	q := strings.ToLower(strings.TrimSpace(p.ddFilter.Text()))
+	var shown []string
+	for _, a := range e.aliases {
+		if strings.Contains(strings.ToLower(a), q) {
+			shown = append(shown, a)
+		}
+	}
+	pick := func(a string) {
+		e.name.SetText(a)
+		e.ssh.SetText("")
+		p.dd = ""
+	}
+	p.ddFilter.SingleLine, p.ddFilter.Submit = true, true
+	for {
+		ev, ok := p.ddFilter.Update(gtx)
+		if !ok {
+			break
+		}
+		switch ev.(type) {
+		case widget.ChangeEvent:
+			p.ddList.Position = gl.Position{}
+		case widget.SubmitEvent:
+			if len(shown) > 0 {
+				pick(shown[0])
+			}
+		}
+	}
+	for _, a := range shown {
+		for p.btn("alias:" + a).Clicked(gtx) {
+			pick(a)
+		}
+	}
+	if p.dd == "" {
+		return
+	}
+	if p.ddFocus {
+		p.ddFocus = false
+		gtx.Execute(key.FocusCmd{Tag: &p.ddFilter})
+	}
+
+	m := op.Record(gtx.Ops)
+	bg := clip.Rect{Min: image.Pt(-1<<14, -1<<14), Max: image.Pt(1<<14, 1<<14)}.Push(gtx.Ops)
+	event.Op(gtx.Ops, &p.ddTag)
+	bg.Pop()
+	itemH, pad := gtx.Dp(28), gtx.Dp(6)
+	listH := min(gtx.Dp(280), max(1, len(shown))*itemH)
+	panel := image.Rect(0, 0, w+gtx.Dp(40), pad+gtx.Dp(32)+pad+listH+pad)
+	o := op.Offset(image.Pt(0, top+gtx.Dp(4))).Push(gtx.Ops)
+	kit.Surface(gtx, panel, gtx.Dp(theme.RadiusPopover), kit.Floating, theme.Mix(th.SurfaceElevated, th.Fg, 0.1), th.SurfaceElevated)
+	pa := clip.Rect(panel).Push(gtx.Ops)
+	event.Op(gtx.Ops, &p.ddPanel) // the panel takes presses the backdrop would
+	pa.Pop()
+
+	fo := op.Offset(image.Pt(pad, pad)).Push(gtx.Ops)
+	fg := gtx
+	fg.Constraints = gl.Exact(image.Pt(panel.Dx()-2*pad, gtx.Dp(32)))
+	p.field(fg, &p.ddFilter, "Filter hosts", true)
+	fo.Pop()
+
+	lo := op.Offset(image.Pt(pad, pad+gtx.Dp(32)+pad)).Push(gtx.Ops)
+	lg := gtx
+	lg.Constraints = gl.Exact(image.Pt(panel.Dx()-2*pad, listH))
+	cl := clip.Rect{Max: lg.Constraints.Max}.Push(gtx.Ops)
+	if len(shown) == 0 {
+		gl.Center.Layout(lg, func(gtx gl.Context) gl.Dimensions {
+			return p.text(gtx, th.UIFont, p.th.Sp(theme.Small), th.Muted, "No host matches")
+		})
+	} else {
+		p.ddList.Axis = gl.Vertical
+		p.ddList.Layout(lg, len(shown), func(gtx gl.Context, i int) gl.Dimensions {
+			a := shown[i]
+			c := p.btn("alias:" + a)
+			return c.Layout(gtx, func(gtx gl.Context) gl.Dimensions {
+				sz := image.Pt(gtx.Constraints.Max.X, itemH)
+				if c.Hovered() {
+					rrect(gtx, theme.Mix(th.SurfaceElevated, th.Fg, 0.06), image.Rectangle{Max: sz}, gtx.Dp(4))
+				}
+				g := gtx
+				g.Constraints.Max.X = sz.X - gtx.Dp(36)
+				mm := op.Record(gtx.Ops)
+				d := p.text(g, th.UIFont, p.th.Sp(theme.Body), th.Fg, a)
+				call := mm.Stop()
+				oo := op.Offset(image.Pt(gtx.Dp(8), (itemH-d.Size.Y)/2)).Push(gtx.Ops)
+				call.Add(gtx.Ops)
+				oo.Pop()
+				if strings.EqualFold(a, strings.TrimSpace(e.name.Text())) {
+					is := gtx.Dp(14)
+					oo = op.Offset(image.Pt(sz.X-gtx.Dp(8)-is, (itemH-is)/2)).Push(gtx.Ops)
+					icon(gtx, th.Primary, is, checkGlyph)
+					oo.Pop()
+				}
+				defer clip.Rect{Max: sz}.Push(gtx.Ops).Pop()
+				pointer.CursorPointer.Add(gtx.Ops)
+				return gl.Dimensions{Size: sz}
+			})
+		})
+	}
+	cl.Pop()
+	lo.Pop()
+	o.Pop()
+	m.Stop().Add(gtx.Ops)
 }
