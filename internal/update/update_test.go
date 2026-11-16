@@ -356,8 +356,9 @@ func TestManaged(t *testing.T) {
 // newer than the latest; a tag never released fails before any write, and
 // a string that is not a release tag fails before any request.
 func TestTagged(t *testing.T) {
-	rel, err := Tagged(LatestURL, "v0.2.13")
-	if want := "https://github.com/quanticstudios/pitwall/releases/download/v0.2.13/"; err != nil || rel.Tag != "v0.2.13" || rel.Base != want {
+	// pitwall-win: LatestURL is this repository's releases page, and its tags end in -win.N.
+	rel, err := Tagged(LatestURL, "v0.2.13-win.2")
+	if want := "https://github.com/kamenkadmitry/pitwall-win/releases/download/v0.2.13-win.2/"; err != nil || rel.Tag != "v0.2.13-win.2" || rel.Base != want {
 		t.Fatalf("Tagged(LatestURL) = %+v, %v; want base %s", rel, err, want)
 	}
 	for _, bad := range []string{"", "latest", "v0.2", "v0.2.13/../../x", "../v0.2.13", "v0.2.13-1-gabc1234", "v0.2.13-dirty"} {
