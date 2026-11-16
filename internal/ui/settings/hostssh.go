@@ -99,12 +99,16 @@ func probeHost(dest string) (int, string) {
 	return probeFail, msg
 }
 
-// installCore runs get.sh --core on dest and returns its output.
+// installCore runs get.sh --core on dest and returns its output. The
+// remote command fails fast when the host lacks the tools the script
+// pipes through, naming the missing one instead of a bare "not found".
 func installCore(dest string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
+	remote := `for t in curl sh tar; do command -v "$t" >/dev/null 2>&1 || { echo "pitwall: $t is not installed on this host" >&2; exit 1; }; done; ` +
+		`curl -fsSL ` + getScript + ` | sh -s -- --core`
 	cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-		"--", dest, "curl -fsSL "+getScript+" | sh -s -- --core")
+		"--", dest, remote)
 	nowindow.Set(cmd)
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
